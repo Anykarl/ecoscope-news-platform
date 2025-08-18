@@ -371,7 +371,7 @@ app.post('/api/backups/select', (req, res) => {
   }
 });
 
-const PORT = 5001;
+const PORT = Number(process.env.PORT || process.env.BACKEND_PORT || 5001);
 app.listen(PORT, () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${PORT}`));
 
 // Planification gratuite via node-cron: toutes les 15–30 minutes (configurable)

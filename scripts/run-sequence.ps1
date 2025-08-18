@@ -1,6 +1,7 @@
 param(
-  [string]$BackendPort = "5001",
-  [string]$BackupDesc = "ajustements_filtrage_et_logs"
+  [int]$BackendPort = 5001,
+  [string]$BackupDesc = "Auto",
+  [switch]$SkipBackendStart
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -20,45 +21,60 @@ Push-Location $Root
 try { npm install | Out-Null } catch { }
 Pop-Location
 
-Write-Host "[1/7] Vérification/libération du port $BackendPort..."
-# Try with Get-NetTCPConnection if available, else netstat
-try {
-  $conns = Get-NetTCPConnection -LocalPort ([int]$BackendPort) -State Listen
-  $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
-} catch {
-  $lines = netstat -ano | Select-String ":$BackendPort"
-  $pids = @()
-  foreach($line in $lines){
-    $parts = ($line.ToString() -split '\s+') | Where-Object { $_ -ne '' }
-    if($parts.Length -ge 5){ $pids += $parts[-1] }
+if (-not $SkipBackendStart) { Write-Host "[1/7] Vérification/libération du port $BackendPort..." }
+function Stop-ProcessOnPort {
+  param([int]$port)
+  $pids = @(netstat -ano | Select-String ":$port\s" | ForEach-Object { ($_ -split '\s+')[-1] }) | Select-Object -Unique
+  if(-not $pids -or $pids.Count -eq 0){ Write-Host "Port $port libre."; return $true }
+  foreach($pid in $pids){
+    Write-Host "Le port $port est occupé par PID $pid. Arrêt du processus..."
+    try { Stop-Process -Id $pid -Force -ErrorAction Stop; Write-Host "Processus $pid arrêté." }
+    catch { Write-Warning "Impossible d'arrêter le processus $pid : $_"; return $false }
   }
-  $pids = $pids | Select-Object -Unique
+  return $true
 }
-if($pids -and $pids.Count -gt 0){
-  Write-Host "Port occupé par PID(s): $($pids -join ', '). Tentative de libération..."
-  foreach($pid in $pids){ try { taskkill /PID $pid /F | Out-Null } catch { } }
+
+if (-not $SkipBackendStart) {
+  if (-not (Stop-ProcessOnPort -port ([int]$BackendPort))) {
+    Write-Error "Impossible de libérer le port $BackendPort. Arrêt du script."; exit 1
+  }
+
+  Write-Host "Attente que le port $BackendPort soit libéré..."
+  $timeout = 15; $elapsed = 0
+  while ($elapsed -lt $timeout) {
+    Start-Sleep -Seconds 1
+    $pidsNow = @(netstat -ano | Select-String ":$BackendPort\s" | ForEach-Object { ($_ -split '\s+')[-1] })
+    if ($pidsNow.Count -eq 0) { Write-Host "Port $BackendPort est désormais libre."; break }
+    $elapsed++
+  }
+  if ($elapsed -ge $timeout) { Write-Warning "Port $BackendPort toujours occupé après $timeout s."; Write-Error "Arrêt du script pour éviter conflit de port."; exit 1 }
+
+  Write-Host "[2/7] Démarrage du backend (nouvelle fenêtre, logs -> $backendLog) sur le port $BackendPort..."
+  # Launch backend with env PORT/BACKEND_PORT and capture output
+  $startCmd = "$env:PORT=$BackendPort; $env:BACKEND_PORT=$BackendPort; npm run backend:dev 2>&1 | Tee-Object -FilePath `"$backendLog`""
+  Start-Process -FilePath "powershell" -ArgumentList @('-NoProfile','-Command', $startCmd) -WorkingDirectory $Root | Out-Null
+
+  Write-Host "[3/7] Attente de /health (60s max)..."
+  $ok=$false; $deadline=(Get-Date).AddSeconds(60)
+  while(-not $ok -and (Get-Date) -lt $deadline){
+    try {
+      $r=Invoke-WebRequest -UseBasicParsing -Uri ("http://127.0.0.1:{0}/health" -f $BackendPort) -TimeoutSec 3
+      if($r.StatusCode -eq 200){ $ok=$true; break }
+    } catch { Start-Sleep -Milliseconds 500 }
+  }
+  if(-not $ok){ Write-Host "Backend KO (timeout)."; exit 1 }
 } else {
-  Write-Host "Port $BackendPort libre."
-}
-
-Write-Host "[2/7] Démarrage du backend (nouvelle fenêtre, logs -> $backendLog)..."
-# Launch backend and capture its output into a log file in the spawned window
-$startCmd = "npm run backend:dev 2>&1 | Tee-Object -FilePath `"$backendLog`""
-Start-Process -FilePath "powershell" -ArgumentList @('-NoProfile','-Command', $startCmd) -WorkingDirectory $Root | Out-Null
-
-Write-Host "[3/7] Attente de /health (60s max)..."
-$ok=$false; $deadline=(Get-Date).AddSeconds(60)
-while(-not $ok -and (Get-Date) -lt $deadline){
+  Write-Host "[1-3/7] Saut des étapes backend (SkipBackendStart=true). Vérification rapide de /health..."
   try {
     $r=Invoke-WebRequest -UseBasicParsing -Uri ("http://127.0.0.1:{0}/health" -f $BackendPort) -TimeoutSec 3
-    if($r.StatusCode -eq 200){ $ok=$true; break }
-  } catch { Start-Sleep -Milliseconds 500 }
+    if($r.StatusCode -ne 200){ Write-Host "Health non OK (code $($r.StatusCode))."; exit 1 }
+  } catch { Write-Host "Health check échoué: $_"; exit 1 }
 }
-if($ok){ Write-Host "Backend OK" } else { Write-Host "Backend KO (timeout)."; exit 1 }
 
 Write-Host "[4/7] Lancement du scraper et capture des logs..."
 $logFile = Join-Path $LogDir ("scrape-{0}.log" -f $stamp)
 Push-Location $Root
+$env:ECOSCOPE_API_URL = "http://127.0.0.1:$BackendPort/api/news"
 npm run scrape 2>&1 | Tee-Object -FilePath $logFile | Out-Null
 Pop-Location
 Write-Host ("Logs sauvegardés: {0}" -f $logFile)
