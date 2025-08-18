@@ -1,10 +1,10 @@
-﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250818-142305.log
-Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250818-142305.txt
-Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_03_2025-08-18_ajustements_filtrage_et_logs.zip
-Git: branch=principal commit=cef876a
+﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250818-160820.log
+Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250818-160820.txt
+Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_04_2025-08-18_ajustements_filtrage_et_logs.zip
+Git: branch=principal commit=6e2e052
 
 --- Diagnostic Content ---
-Collecte=1, Skipped=265, AprÃ¨sDÃ©dup=1
-Principales raisons: non-science/environment(128), non-planete(111), non-news(10), dup-in-page(8), bad-title(8)
+Collecte=1, Skipped=328, AprÃ¨sDÃ©dup=1
+Principales raisons: non-planete(174), non-science/environment(128), non-news(10), dup-in-page(8), bad-title(8)
 Recommandations: RAS: filtrage et dÃ©duplication semblent raisonnables.
 

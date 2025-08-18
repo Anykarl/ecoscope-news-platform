@@ -12,6 +12,7 @@ const API_URL = process.env.ECOSCOPE_API_URL || 'http://127.0.0.1:5001/api/news'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 EcoScopeScraper/1.1';
 const REQ_OPTS = { timeout: 12000, headers: { 'User-Agent': UA, 'Accept-Language': 'fr,en;q=0.8' } };
 const ENRICH_CAP = 15; // plafond global d'articles enrichis (meta + image) par session
+const MAX_PER_SOURCE = Number(process.env.MAX_PER_SOURCE || 30); // plafond par source
 
 // Concurrence contrôlée et délais polis entre lots
 const MAX_ENRICH_CONCURRENCY = 3;
@@ -65,7 +66,8 @@ const BAD_TITLE_RX = new RegExp([
 ].join('|'), 'i');
 function isBadTitle(title) {
   const t = sanitizeTitle(title).toLowerCase();
-  if (!t || t.length < 8) return true;
+  // Assouplir la longueur minimale pour éviter d'écarter certains titres courts mais valides
+  if (!t || t.length < 5) return true;
   if (BAD_TITLE_RX.test(t)) return true;
   return false;
 }
@@ -132,8 +134,8 @@ async function scrapeLeMonde() {
     const results = [];
     const skipped = [];
     // 1) Sélecteurs spécifiques aux cartes d'article (pass prioritaire)
-    $('a.teaser__link, a.article__link, .teaser__title a').each((_, el) => {
-      if (results.length >= 15) return false;
+    $('a.teaser__link, a.article__link, .teaser__title a, a[href*="/planete/"][href*="/article/"]').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
       const title = sanitizeTitle($(el).text());
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
@@ -145,7 +147,7 @@ async function scrapeLeMonde() {
     });
     // 2) Fallback générique (si pas assez d'items)
     $('section, main').find('article a[href], h3 a[href], h2 a[href]').each((_, el) => {
-      if (results.length >= 15) return false;
+      if (results.length >= MAX_PER_SOURCE) return false;
       const title = sanitizeTitle($(el).text());
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
@@ -155,6 +157,20 @@ async function scrapeLeMonde() {
       if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
       results.push({ title, url: href, lang: 'fr' });
     });
+    // 3) Ouverture légère: parcourir toutes les ancres filtrées par /planete/ + /article/
+    if (results.length < MAX_PER_SOURCE) {
+      $('a[href*="/planete/"][href*="/article/"]').each((_, el) => {
+        if (results.length >= MAX_PER_SOURCE) return false;
+        const title = sanitizeTitle($(el).text());
+        const href = normalizeUrl($(el).attr('href'), base);
+        if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
+        if (!/\/article\//.test(href)) { skipped.push({ title, href, reason: 'non-article' }); return; }
+        if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
+        if (href.includes('#') || /\/live\//.test(href)) { skipped.push({ title, href, reason: 'anchor-or-live' }); return; }
+        if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
+        results.push({ title, url: href, lang: 'fr' });
+      });
+    }
     return { results, skipped };
   } catch (e) {
     console.warn('Le Monde: erreur scrape:', e.message);
@@ -171,8 +187,8 @@ async function scrapeNatGeo() {
     const results = [];
     const skipped = [];
     // 1) Sélecteurs plus ciblés: liens d'article dans <article> ou liens filtrés par href
-    $('main article a[href*="/environment/"][href*="/article/"]').each((_, el) => {
-      if (results.length >= 15) return false;
+    $('main article a[href*="/environment/"][href*="/article/"], a[href*="/environment/"][href*="/article/"]').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       const title = sanitizeTitle($(el).text());
       if (!href || !/nationalgeographic\.com\/environment\//.test(href)) { skipped.push({ title, href, reason: 'non-environment or invalid href' }); return; }
@@ -183,7 +199,7 @@ async function scrapeNatGeo() {
     });
     // 2) Fallback générique (si pas assez d'items)
     $('main a[href]').each((_, el) => {
-      if (results.length >= 15) return false;
+      if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/nationalgeographic\.com\/environment\//.test(href)) { skipped.push({ title: '', href, reason: 'non-environment or invalid href' }); return; }
       if (!/\/article\//.test(href)) { skipped.push({ title: '', href, reason: 'non-article' }); return; }
@@ -192,6 +208,19 @@ async function scrapeNatGeo() {
       if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
       results.push({ title, url: href, lang: 'en' });
     });
+    // 3) Ouverture légère: toutes ancres avec filtres /environment/ + /article/
+    if (results.length < MAX_PER_SOURCE) {
+      $('a[href*="/environment/"][href*="/article/"]').each((_, el) => {
+        if (results.length >= MAX_PER_SOURCE) return false;
+        const href = normalizeUrl($(el).attr('href'), base);
+        const title = sanitizeTitle($(el).text());
+        if (!href || !/nationalgeographic\.com\/environment\//.test(href)) { skipped.push({ title, href, reason: 'non-environment or invalid href' }); return; }
+        if (!/\/article\//.test(href)) { skipped.push({ title, href, reason: 'non-article' }); return; }
+        if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
+        if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
+        results.push({ title, url: href, lang: 'en' });
+      });
+    }
     return { results, skipped };
   } catch (e) {
     console.warn('NatGeo: erreur scrape:', e.message);
@@ -208,8 +237,8 @@ async function scrapeBBC() {
     const results = [];
     const skipped = [];
     // 1) Sélecteurs spécifiques: headings de promos BBC
-    $('a.gs-c-promo-heading').each((_, el) => {
-      if (results.length >= 15) return false;
+    $('a.gs-c-promo-heading, a[href*="/news/"][href*="science"], a[href*="/news/"][href*="environment"]').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/bbc\.com\/news\//.test(href)) { skipped.push({ title: '', href, reason: 'non-news or invalid href' }); return; }
       if (!(/science/.test(href) || /environment/.test(href))) { skipped.push({ title: '', href, reason: 'non-science/environment' }); return; }
@@ -221,7 +250,7 @@ async function scrapeBBC() {
       results.push({ title, url: href, lang: 'en' });
     });
     $('main a[href]').each((_, el) => {
-      if (results.length >= 15) return false;
+      if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/bbc\.com\/news\//.test(href)) { skipped.push({ title: '', href, reason: 'non-news or invalid href' }); return; }
       if (!(/science/.test(href) || /environment/.test(href))) { skipped.push({ title: '', href, reason: 'non-science/environment' }); return; }
@@ -233,6 +262,21 @@ async function scrapeBBC() {
       if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
       results.push({ title, url: href, lang: 'en' });
     });
+    // 3) Ouverture légère: toutes ancres news science/environment avec heuristique d'article
+    if (results.length < MAX_PER_SOURCE) {
+      $('a[href*="/news/"]').each((_, el) => {
+        if (results.length >= MAX_PER_SOURCE) return false;
+        const href = normalizeUrl($(el).attr('href'), base);
+        if (!href || !/bbc\.com\/news\//.test(href)) { return; }
+        if (!(/science/.test(href) || /environment/.test(href))) { return; }
+        if (/\/av\//.test(href) || /\/live\//.test(href)) { return; }
+        if (!/article|\/[a-z0-9-]{6,}/i.test(href)) { return; }
+        const title = sanitizeTitle($(el).text());
+        if (isBadTitle(title)) { return; }
+        if (seen.has(href)) { return; } seen.add(href);
+        results.push({ title, url: href, lang: 'en' });
+      });
+    }
     return { results, skipped };
   } catch (e) {
     console.warn('BBC: erreur scrape:', e.message);
