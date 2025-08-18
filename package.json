@@ -1,0 +1,21 @@
+{
+  "name": "ecoscope-test",
+  "private": true,
+  "version": "1.0.0",
+  "description": "EcoScope monorepo scripts to run backend (with cron) and frontend together",
+  "scripts": {
+    "backend:cron": "cross-env SCRAPE_INTERVAL_MINUTES=15 npm --prefix backend run dev",
+    "backend:dev": "npm --prefix backend run dev",
+    "frontend": "npm --prefix frontend run dev",
+    "scrape": "npm --prefix backend run scrape",
+    "dev:all": "concurrently -n BACKEND,FRONTEND -c green,blue \"npm run backend:cron\" \"wait-on tcp:127.0.0.1:5001 && npm run frontend\"",
+    "dev:all:seed": "concurrently -n BACKEND,SCRAPER,FRONTEND -c green,yellow,blue \"npm run backend:cron\" \"wait-on tcp:127.0.0.1:5001 && npm run scrape\" \"wait-on tcp:127.0.0.1:5001 && npm run frontend\"",
+    "backup": "node backup.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "wait-on": "^8.0.1",
+    "archiver": "^6.0.1"
+  }
+}
