@@ -12,6 +12,8 @@ $Root = Split-Path -Parent $ScriptDir
 # Ensure logs directory
 $LogDir = Join-Path $Root 'logs'
 if(!(Test-Path $LogDir)){ New-Item -ItemType Directory -Path $LogDir | Out-Null }
+${stamp} = Get-Date -Format 'yyyyMMdd-HHmmss'
+${backendLog} = Join-Path $LogDir ("backend-${stamp}.log")
 
 Write-Host "[1/7] Vérification/libération du port $BackendPort..."
 # Try with Get-NetTCPConnection if available, else netstat
@@ -34,11 +36,13 @@ if($pids -and $pids.Count -gt 0){
   Write-Host "Port $BackendPort libre."
 }
 
-Write-Host "[2/7] Démarrage du backend (nouvelle fenêtre)..."
-Start-Process -FilePath "powershell" -ArgumentList '-NoProfile -Command npm run backend:dev' -WorkingDirectory $Root | Out-Null
+Write-Host "[2/7] Démarrage du backend (nouvelle fenêtre, logs -> $backendLog)..."
+# Launch backend and capture its output into a log file in the spawned window
+$startCmd = "npm run backend:dev 2>&1 | Tee-Object -FilePath `"$backendLog`""
+Start-Process -FilePath "powershell" -ArgumentList @('-NoProfile','-Command', $startCmd) -WorkingDirectory $Root | Out-Null
 
-Write-Host "[3/7] Attente de /health (30s max)..."
-$ok=$false; $deadline=(Get-Date).AddSeconds(30)
+Write-Host "[3/7] Attente de /health (60s max)..."
+$ok=$false; $deadline=(Get-Date).AddSeconds(60)
 while(-not $ok -and (Get-Date) -lt $deadline){
   try {
     $r=Invoke-WebRequest -UseBasicParsing -Uri ("http://127.0.0.1:{0}/health" -f $BackendPort) -TimeoutSec 3
@@ -48,7 +52,6 @@ while(-not $ok -and (Get-Date) -lt $deadline){
 if($ok){ Write-Host "Backend OK" } else { Write-Host "Backend KO (timeout)."; exit 1 }
 
 Write-Host "[4/7] Lancement du scraper et capture des logs..."
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logFile = Join-Path $LogDir ("scrape-{0}.log" -f $stamp)
 Push-Location $Root
 npm run scrape 2>&1 | Tee-Object -FilePath $logFile | Out-Null
