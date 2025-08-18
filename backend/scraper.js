@@ -132,11 +132,12 @@ async function scrapeLeMonde() {
     const results = [];
     const skipped = [];
     // cibler les cartes d'articles
-    $('section, main, div').find('article a[href], h3 a[href], h2 a[href]').each((_, el) => {
-      if (results.length >= 5) return false;
+    $('section, main').find('article a[href], h3 a[href], h2 a[href]').each((_, el) => {
+      if (results.length >= 15) return false;
       const title = sanitizeTitle($(el).text());
       const href = normalizeUrl($(el).attr('href'), base);
-      if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete or invalid href' }); return; }
+      if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
+      if (!/\/article\//.test(href)) { skipped.push({ title, href, reason: 'non-article' }); return; }
       if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
       if (href.includes('#') || /\/live\//.test(href)) { skipped.push({ title, href, reason: 'anchor-or-live' }); return; }
       if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
@@ -158,7 +159,7 @@ async function scrapeNatGeo() {
     const results = [];
     const skipped = [];
     $('main a[href]').each((_, el) => {
-      if (results.length >= 5) return false;
+      if (results.length >= 15) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/nationalgeographic\.com\/environment\//.test(href)) { skipped.push({ title: '', href, reason: 'non-environment or invalid href' }); return; }
       if (!/\/article\//.test(href)) { skipped.push({ title: '', href, reason: 'non-article' }); return; }
@@ -183,11 +184,13 @@ async function scrapeBBC() {
     const results = [];
     const skipped = [];
     $('main a[href]').each((_, el) => {
-      if (results.length >= 5) return false;
+      if (results.length >= 15) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/bbc\.com\/news\//.test(href)) { skipped.push({ title: '', href, reason: 'non-news or invalid href' }); return; }
       if (!(/science/.test(href) || /environment/.test(href))) { skipped.push({ title: '', href, reason: 'non-science/environment' }); return; }
       if (/\/av\//.test(href) || /\/live\//.test(href)) { skipped.push({ title: '', href, reason: 'av-or-live' }); return; }
+      // Exclure pages index/section sans slug article (heuristique: nécessite au moins un tiret ou 'article')
+      if (!/article|\/[a-z0-9-]{6,}/i.test(href)) { skipped.push({ title: '', href, reason: 'likely-index' }); return; }
       const title = sanitizeTitle($(el).text());
       if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
       if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
@@ -232,12 +235,14 @@ async function runOnce() {
   ]);
   const preItems = batches.flatMap(b => b.results);
   const skippedAll = batches.flatMap(b => b.skipped);
+  console.log(`RAW_COUNT: ${preItems.length}`);
   console.log(`📥 Collecte brute: ${preItems.length} item(s)`);
   if (preItems.length) {
     console.log('📄 Titres (brut):');
     preItems.forEach((it, i) => console.log(`  - [${i+1}] ${it.title} :: ${it.url}`));
   }
   if (skippedAll.length) {
+    console.log(`SKIPPED_COUNT: ${skippedAll.length}`);
     console.log(`🚫 Skipped: ${skippedAll.length}`);
     skippedAll.forEach((s, i) => console.log(`  x [${i+1}] reason=${s.reason} :: ${s.title || '(no-title)'} :: ${s.href || '(no-url)'}`));
   }
@@ -250,6 +255,7 @@ async function runOnce() {
     seenUrls.add(it.url);
     items.push(it);
   }
+  console.log(`DEDUP_COUNT: ${items.length}`);
   console.log(`📦 Après déduplication inter-sources: ${items.length} item(s)`);
 
   // Enrichir seulement les ENRICH_CAP premiers

@@ -15,6 +15,11 @@ if(!(Test-Path $LogDir)){ New-Item -ItemType Directory -Path $LogDir | Out-Null 
 ${stamp} = Get-Date -Format 'yyyyMMdd-HHmmss'
 ${backendLog} = Join-Path $LogDir ("backend-${stamp}.log")
 
+Write-Host "[0/7] Installation des dépendances (npm install)..."
+Push-Location $Root
+try { npm install | Out-Null } catch { }
+Pop-Location
+
 Write-Host "[1/7] Vérification/libération du port $BackendPort..."
 # Try with Get-NetTCPConnection if available, else netstat
 try {
@@ -60,12 +65,24 @@ Write-Host ("Logs sauvegardés: {0}" -f $logFile)
 
 Write-Host "[5/7] Analyse des logs..."
 $log = Get-Content $logFile -Raw
-$collectMatch = [regex]::Match($log, '📥 Collecte brute: (\d+)')
-$skippedMatch = [regex]::Match($log, '🚫 Skipped: (\d+)')
-$dedupMatch = [regex]::Match($log, '📦 Après déduplication inter-sources: (\d+)')
+# Prefer ASCII markers to avoid emoji/encoding issues
+$collectMatch = [regex]::Match($log, 'RAW_COUNT:\s*(\d+)', 'IgnoreCase')
+$skippedMatch = [regex]::Match($log, 'SKIPPED_COUNT:\s*(\d+)', 'IgnoreCase')
+$dedupMatch = [regex]::Match($log, 'DEDUP_COUNT:\s*(\d+)', 'IgnoreCase')
 $collect = if ($collectMatch.Success) { [int]$collectMatch.Groups[1].Value } else { 0 }
 $skipped = if ($skippedMatch.Success) { [int]$skippedMatch.Groups[1].Value } else { 0 }
 $after = if ($dedupMatch.Success) { [int]$dedupMatch.Groups[1].Value } else { 0 }
+
+# Fallbacks if markers not found
+if ($collect -eq 0) {
+  $m = [regex]::Match($log, 'Collecte brute:\s*(\d+)'); if ($m.Success) { $collect = [int]$m.Groups[1].Value }
+}
+if ($skipped -eq 0) {
+  $m = [regex]::Match($log, 'Skipped:\s*(\d+)'); if ($m.Success) { $skipped = [int]$m.Groups[1].Value }
+}
+if ($after -eq 0) {
+  $m = [regex]::Match($log, 'Après déduplication inter-sources:\s*(\d+)'); if ($m.Success) { $after = [int]$m.Groups[1].Value }
+}
 
 # Reasons
 $reasons = @{}
@@ -131,3 +148,28 @@ Write-Host "RESUME:"
 Write-Host ("- Log: {0}" -f $logFile)
 Write-Host ("- Diagnostic: {0}" -f $diagFile)
 Write-Host ("- Backup+Commit: OK (commit={0})" -f $commitMsg)
+
+# Write a non-ignored summary for convenience
+$summaryPath = Join-Path $Root 'last-run-summary.txt'
+$latestZip = $null
+if (Test-Path (Join-Path $Root 'backups')) {
+  $latestZip = Get-ChildItem -Path (Join-Path $Root 'backups') -Filter '*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+
+# Git info
+$branch = ''
+$commitShort = ''
+try { $branch = (git rev-parse --abbrev-ref HEAD 2>$null).Trim() } catch {}
+try { $commitShort = (git rev-parse --short HEAD 2>$null).Trim() } catch {}
+
+$summary = @(
+  "Log file: $logFile",
+  "Diagnostic file: $diagFile",
+  ("Latest backup: {0}" -f ($latestZip.FullName)) ,
+  ("Git: branch={0} commit={1}" -f $branch, $commitShort),
+  "",
+  "--- Diagnostic Content ---",
+  (Get-Content -Raw $diagFile)
+) -join "`r`n"
+$summary | Set-Content -Path $summaryPath -Encoding UTF8
+Write-Host ("Summary written: {0}" -f $summaryPath)
