@@ -11,11 +11,13 @@ import * as cheerio from 'cheerio';
 const API_URL = process.env.ECOSCOPE_API_URL || 'http://127.0.0.1:5001/api/news';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 EcoScopeScraper/1.1';
 const REQ_OPTS = { timeout: 12000, headers: { 'User-Agent': UA, 'Accept-Language': 'fr,en;q=0.8' } };
-const ENRICH_CAP = 15; // plafond global d'articles enrichis (meta + image) par session
+// Plafond global d'articles enrichis (meta + image) par session
+// Configurable via ENRICH_CAP ou MAX_ENRICH (défaut 30)
+const ENRICH_CAP = Number(process.env.ENRICH_CAP || process.env.MAX_ENRICH || 30);
 const MAX_PER_SOURCE = Number(process.env.MAX_PER_SOURCE || 30); // plafond par source
 
 // Concurrence contrôlée et délais polis entre lots
-const MAX_ENRICH_CONCURRENCY = 3;
+const MAX_ENRICH_CONCURRENCY = 4;
 const MAX_POST_CONCURRENCY = 4;
 const BATCH_DELAY_MS = 750;
 
@@ -133,12 +135,14 @@ async function scrapeLeMonde() {
     const seen = new Set();
     const results = [];
     const skipped = [];
+    const NON_ARTICLE_PATH_RX = /(\/video\/|\/portfolio\/|\/blog\/|\/dossier\/|\/tags\/)/i;
     // 1) Sélecteurs spécifiques aux cartes d'article (pass prioritaire)
     $('a.teaser__link, a.article__link, .teaser__title a, a[href*="/planete/"][href*="/article/"]').each((_, el) => {
       if (results.length >= MAX_PER_SOURCE) return false;
       const title = sanitizeTitle($(el).text());
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
+      if (NON_ARTICLE_PATH_RX.test(href)) { skipped.push({ title, href, reason: 'non-article-section' }); return; }
       if (!/\/article\//.test(href)) { skipped.push({ title, href, reason: 'non-article' }); return; }
       if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
       if (href.includes('#') || /\/live\//.test(href)) { skipped.push({ title, href, reason: 'anchor-or-live' }); return; }
@@ -151,6 +155,7 @@ async function scrapeLeMonde() {
       const title = sanitizeTitle($(el).text());
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
+      if (NON_ARTICLE_PATH_RX.test(href)) { skipped.push({ title, href, reason: 'non-article-section' }); return; }
       if (!/\/article\//.test(href)) { skipped.push({ title, href, reason: 'non-article' }); return; }
       if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
       if (href.includes('#') || /\/live\//.test(href)) { skipped.push({ title, href, reason: 'anchor-or-live' }); return; }
@@ -164,6 +169,7 @@ async function scrapeLeMonde() {
         const title = sanitizeTitle($(el).text());
         const href = normalizeUrl($(el).attr('href'), base);
         if (!href || !/lemonde\.fr\/.+\/planete\//.test(href)) { skipped.push({ title, href, reason: 'non-planete' }); return; }
+        if (NON_ARTICLE_PATH_RX.test(href)) { skipped.push({ title, href, reason: 'non-article-section' }); return; }
         if (!/\/article\//.test(href)) { skipped.push({ title, href, reason: 'non-article' }); return; }
         if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
         if (href.includes('#') || /\/live\//.test(href)) { skipped.push({ title, href, reason: 'anchor-or-live' }); return; }
