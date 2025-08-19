@@ -15,6 +15,8 @@ const REQ_OPTS = { timeout: 12000, headers: { 'User-Agent': UA, 'Accept-Language
 // Configurable via ENRICH_CAP ou MAX_ENRICH (défaut 30)
 const ENRICH_CAP = Number(process.env.ENRICH_CAP || process.env.MAX_ENRICH || 30);
 const MAX_PER_SOURCE = Number(process.env.MAX_PER_SOURCE || 30); // plafond par source
+const VIDEO_ENABLED = String(process.env.VIDEO_ENABLED || 'true').toLowerCase() !== 'false';
+const VIDEO_KEYWORDS = String(process.env.VIDEO_KEYWORDS || 'climat,climate,environment,environnement,énergie,energie,pollution,biodiversité,biodiversity,eau,water,agriculture,canicule,heatwave,incendie,wildfire,nucléaire,nuclear,plastique,plastic').split(',').map(s => s.trim()).filter(Boolean);
 
 // Concurrence contrôlée et délais polis entre lots
 const MAX_ENRICH_CONCURRENCY = 4;
@@ -34,6 +36,39 @@ async function mapWithConcurrency(arr, limit, fn, betweenBatchesDelay = BATCH_DE
   return out;
 }
 
+async function scrapeVideos() {
+  if (!VIDEO_ENABLED) return { results: [], skipped: [] };
+  const sources = [
+    { name: 'LeMondeVideo', base: 'https://www.lemonde.fr/videos/', lang: 'fr', sel: 'a[href*="/videos/"]' },
+    { name: 'HuffPostVideoFR', base: 'https://www.huffingtonpost.fr/videos/', lang: 'fr', sel: 'a[href*="/videos/"]' },
+  ];
+  const all = [];
+  const allSkipped = [];
+  for (const src of sources) {
+    try {
+      const { data } = await axios.get(src.base, REQ_OPTS);
+      const $ = cheerio.load(data);
+      const seen = new Set();
+      $(src.sel).each((_, el) => {
+        if (all.length >= MAX_PER_SOURCE) return false;
+        const href = normalizeUrl($(el).attr('href'), src.base);
+        if (!href) { allSkipped.push({ title: '', href, reason: 'invalid-href' }); return; }
+        if (/\/live\//i.test(href)) { allSkipped.push({ title: '', href, reason: 'live' }); return; }
+        const title = sanitizeTitle($(el).text());
+        if (!title || isBadTitle(title)) { allSkipped.push({ title, href, reason: 'bad-title' }); return; }
+        if (!isVideoRelevant(title)) { allSkipped.push({ title, href, reason: 'video-not-whitelisted' }); return; }
+        if (seen.has(href)) { allSkipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
+        all.push({ title, url: href, lang: src.lang, category: 'Vidéos' });
+      });
+      console.log(`SRC_SUMMARY: ${src.name} collected=${seen.size}`);
+    } catch (e) {
+      console.warn(`${src.name}: erreur scrape:`, e.message);
+      allSkipped.push({ title: '', href: src.base, reason: 'error:' + e.message });
+    }
+  }
+  return { results: all, skipped: allSkipped };
+}
+
 function normalizeUrl(href, base) {
   try {
     if (!href) return null;
@@ -46,6 +81,18 @@ function normalizeUrl(href, base) {
 
 function sanitizeTitle(text) {
   return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeForDedupTitle(text) {
+  return sanitizeTitle(text)
+    .toLowerCase()
+    .replace(/["'“”‘’\-–—_:;.,!?()\[\]\{\}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getDomainFromUrl(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
 // Filtre étendu pour titres parasites/navigation/pagination (mots isolés et expressions)
@@ -85,6 +132,11 @@ function mapCategory(title) {
   if (has('agriculture', 'agricole', 'farmer', 'crop', 'récolte', 'pesticide', 'fertilizer', 'fertilisant', 'soil', 'sol', 'irrigation', 'livestock', 'élevage')) return 'Agriculture';
   if (has('incendie', 'wildfire', 'séisme', 'earthquake', 'tsunami', 'volcano', 'volcan', 'ouragan', 'hurricane', 'cyclone', 'typhoon', 'tempête', 'storm', 'landslide', 'glissement', 'avalanche')) return 'Risques naturels';
   return 'Changement climatique';
+}
+
+function isVideoRelevant(title) {
+  const t = (title || '').toLowerCase();
+  return VIDEO_KEYWORDS.some(k => t.includes(k.toLowerCase()));
 }
 
 async function fetchArticleMeta(url) {
@@ -193,7 +245,7 @@ async function scrapeNatGeo() {
     const results = [];
     const skipped = [];
     // 1) Sélecteurs plus ciblés: liens d'article dans <article> ou liens filtrés par href
-    $('main article a[href*="/environment/"][href*="/article/"], a[href*="/environment/"][href*="/article/"]').each((_, el) => {
+    $('main article a[href*="/environment/"][href*="/article/"], a[href*="/environment/"][href*="/article/"], a[href*="/environment/"][href*="/science/"]').each((_, el) => {
       if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       const title = sanitizeTitle($(el).text());
@@ -204,7 +256,7 @@ async function scrapeNatGeo() {
       results.push({ title, url: href, lang: 'en' });
     });
     // 2) Fallback générique (si pas assez d'items)
-    $('main a[href]').each((_, el) => {
+    $('main a[href], section a[href]').each((_, el) => {
       if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/nationalgeographic\.com\/environment\//.test(href)) { skipped.push({ title: '', href, reason: 'non-environment or invalid href' }); return; }
@@ -216,7 +268,7 @@ async function scrapeNatGeo() {
     });
     // 3) Ouverture légère: toutes ancres avec filtres /environment/ + /article/
     if (results.length < MAX_PER_SOURCE) {
-      $('a[href*="/environment/"][href*="/article/"]').each((_, el) => {
+      $('a[href*="/environment/"][href*="/article/"], a[href*="/environment/"][href*="/science/"]').each((_, el) => {
         if (results.length >= MAX_PER_SOURCE) return false;
         const href = normalizeUrl($(el).attr('href'), base);
         const title = sanitizeTitle($(el).text());
@@ -242,8 +294,8 @@ async function scrapeBBC() {
     const seen = new Set();
     const results = [];
     const skipped = [];
-    // 1) Sélecteurs spécifiques: headings de promos BBC
-    $('a.gs-c-promo-heading, a[href*="/news/"][href*="science"], a[href*="/news/"][href*="environment"]').each((_, el) => {
+    // 1) Sélecteurs spécifiques: headings de promos BBC (inclure variations récentes)
+    $('a.gs-c-promo-heading, a:has(h3.gs-c-promo-heading__title), a[href*="/news/"][href*="science"], a[href*="/news/"][href*="environment"]').each((_, el) => {
       if (results.length >= MAX_PER_SOURCE) return false;
       const href = normalizeUrl($(el).attr('href'), base);
       if (!href || !/bbc\.com\/news\//.test(href)) { skipped.push({ title: '', href, reason: 'non-news or invalid href' }); return; }
@@ -319,6 +371,7 @@ async function runOnce() {
     scrapeLeMonde(),
     scrapeNatGeo(),
     scrapeBBC(),
+    scrapeVideos(),
   ]);
   const preItems = batches.flatMap(b => b.results);
   const skippedAll = batches.flatMap(b => b.skipped);
@@ -334,12 +387,16 @@ async function runOnce() {
     skippedAll.forEach((s, i) => console.log(`  x [${i+1}] reason=${s.reason} :: ${s.title || '(no-title)'} :: ${s.href || '(no-url)'}`));
   }
 
-  // Déduplication inter-sources par URL (post-collecte)
-  const seenUrls = new Set();
+  // Déduplication inter-sources par clé (titre normalisé + domaine) pour capter mêmes sujets multi-URLs
+  const seenKeys = new Set();
   const items = [];
   for (const it of preItems) {
-    if (!it?.url || seenUrls.has(it.url)) continue;
-    seenUrls.add(it.url);
+    if (!it?.url) continue;
+    const domain = getDomainFromUrl(it.url);
+    const normTitle = normalizeForDedupTitle(it.title || '');
+    const key = `${domain}::${normTitle}`;
+    if (!normTitle || seenKeys.has(key)) continue;
+    seenKeys.add(key);
     items.push(it);
   }
   console.log(`DEDUP_COUNT: ${items.length}`);
@@ -381,12 +438,13 @@ async function runOnce() {
   // Envoi (concurrence limitée)
   const allPayloads = [...enrichedPayloads, ...basicPayloads];
   let ok = 0;
+  let ko = 0;
   await mapWithConcurrency(
     allPayloads,
     MAX_POST_CONCURRENCY,
     async (p) => {
       const sent = await sendArticle(p);
-      if (sent) ok++;
+      if (sent) ok++; else ko++;
       return sent;
     }
   );
@@ -396,6 +454,8 @@ async function runOnce() {
   const p95Ms = Math.round(percentile(enrichTimes, 95));
   console.log(`⏱️ Enrichissement: ${enrichedPayloads.length}/${items.length} (cap=${ENRICH_CAP}), avg=${avgMs}ms, p95=${p95Ms}ms, total=${totalMs}ms`);
   console.log(`📤 Scraper: ${ok}/${allPayloads.length} article(s) posté(s)`);
+  console.log(`POST_SUMMARY: ok=${ok} ko=${ko} total=${allPayloads.length}`);
+  console.log(`ENRICH_CAP_USED: ${ENRICH_CAP}`);
 }
 
 // Exécution

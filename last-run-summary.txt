@@ -1,7 +1,7 @@
-﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250818-170444.log
-Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250818-170444.txt
-Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_06_2025-08-18_ajustements_filtrage_cap30.zip
-Git: branch=principal commit=2c8f245
+﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250818-172417.log
+Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250818-172417.txt
+Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_07_2025-08-18_affinage_lemonde_exclusions_enrich30.zip
+Git: branch=principal commit=9405166
 
 --- Diagnostic Content ---
 Collecte=11, Skipped=397, AprÃ¨sDÃ©dup=11
