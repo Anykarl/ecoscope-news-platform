@@ -1,10 +1,7 @@
-﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250818-172417.log
-Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250818-172417.txt
-Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_07_2025-08-18_affinage_lemonde_exclusions_enrich30.zip
-Git: branch=principal commit=9405166
+﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250821-163022.log
+Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250821-163022.txt
+Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_09_2025-08-21_auto.zip
+Git: branch=principal commit=a6f2ec9
 
 --- Diagnostic Content ---
-Collecte=11, Skipped=397, AprÃ¨sDÃ©dup=11
-Principales raisons: non-planete(213), non-science/environment(127), dup-in-page(29), bad-title(18), non-news(10)
-Recommandations: RAS: filtrage et dÃ©duplication semblent raisonnables.
 

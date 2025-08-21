@@ -158,9 +158,13 @@ $diagText = @(
   ("Recommandations: {0}" -f ($rec -join ' | '))
 ) -join "`r`n"
 
+$diagHeader = ("=== Diagnostic {0} ===" -f (Get-Date -Format 's'))
+$finalDiag = if ([string]::IsNullOrWhiteSpace($diagText)) { "$diagHeader`r`n(empty: no markers found in scrape log)" } else { "$diagHeader`r`n$diagText" }
+
 $diagFile = Join-Path $LogDir ("diagnostic-{0}.txt" -f $stamp)
-$diagText | Set-Content -Path $diagFile -Encoding UTF8
-Write-Host ("Diagnostic sauvegardé: {0}" -f $diagFile)
+$finalDiag | Set-Content -Path $diagFile -Encoding UTF8
+$diagLen = (Get-Item $diagFile).Length
+Write-Host ("Diagnostic sauvegardé: {0} (taille={1} octets)" -f $diagFile, $diagLen)
 
 Write-Host "[6/7] Sauvegarde zip (backup)..."
 Push-Location $Root
