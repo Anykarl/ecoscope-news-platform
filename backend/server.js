@@ -10,24 +10,30 @@ import { ReadableStream, TransformStream } from 'node:stream/web';
 import { Blob, File } from 'node:buffer';
 import { fetch, Headers, FormData, Request, Response } from 'undici';
 
-// Polyfill complet Undici pour Node 18 (File/Blob/Streams/fetch)
-Object.defineProperties(globalThis, {
-  TextDecoder: { value: TextDecoder },
-  TextEncoder: { value: TextEncoder },
-  ReadableStream: { value: ReadableStream },
-  TransformStream: { value: TransformStream },
-  Blob: { value: Blob },
-  File: { value: File },
-  fetch: { value: fetch, writable: true },
-  Headers: { value: Headers },
-  FormData: { value: FormData },
-  Request: { value: Request },
-  Response: { value: Response },
-});
+// Polyfill Undici/Web: n'assigne que si manquant (évite TypeError si déjà définis)
+if (typeof globalThis.TextDecoder === 'undefined') globalThis.TextDecoder = TextDecoder;
+if (typeof globalThis.TextEncoder === 'undefined') globalThis.TextEncoder = TextEncoder;
+if (typeof globalThis.ReadableStream === 'undefined') globalThis.ReadableStream = ReadableStream;
+if (typeof globalThis.TransformStream === 'undefined') globalThis.TransformStream = TransformStream;
+if (typeof globalThis.Blob === 'undefined') globalThis.Blob = Blob;
+if (typeof globalThis.File === 'undefined') globalThis.File = File;
+if (typeof globalThis.fetch !== 'function') globalThis.fetch = fetch;
+if (typeof globalThis.Headers === 'undefined') globalThis.Headers = Headers;
+if (typeof globalThis.FormData === 'undefined') globalThis.FormData = FormData;
+if (typeof globalThis.Request === 'undefined') globalThis.Request = Request;
+if (typeof globalThis.Response === 'undefined') globalThis.Response = Response;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Robust error handling: prevent process crash on unhandled errors, log them instead
+process.on('uncaughtException', (err) => {
+  console.error('UncaughtException:', err?.stack || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UnhandledRejection:', reason);
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -372,7 +378,18 @@ app.post('/api/backups/select', (req, res) => {
 });
 
 const PORT = Number(process.env.PORT || process.env.BACKEND_PORT || 5001);
-app.listen(PORT, () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${PORT}`));
+console.log('🔧 ENV:', { PORT, BACKEND_PORT: process.env.BACKEND_PORT, ENABLE_CRON: process.env.ENABLE_CRON });
+app
+  .listen(PORT, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${PORT}`))
+  .on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(`❌ Port ${PORT} déjà occupé. Veuillez libérer le port.`);
+      process.exit(1);
+    } else {
+      console.error('❌ Erreur de démarrage:', err?.stack || err);
+      process.exit(1);
+    }
+  });
 
 // Planification gratuite via node-cron: toutes les 15–30 minutes (configurable)
 // Env: SCRAPE_INTERVAL_MINUTES (15 à 30); défaut: 30
@@ -382,10 +399,25 @@ function getCronExpr() {
   if (safe === 30) return '*/30 * * * *';
   return `*/${safe} * * * *`;
 }
-const cronExpr = getCronExpr();
-console.log('⏲️  Cron activé avec intervalle:', cronExpr);
-cron.schedule(cronExpr, () => {
-  console.log('⏰ Cron: lancement du scraper');
-  const proc = spawn(process.execPath, ['scraper.js'], { cwd: process.cwd(), stdio: 'inherit' });
-  proc.on('exit', (code) => console.log('✅ Scraper terminé avec code', code));
-});
+// Guard cron: enable only if ENABLE_CRON === 'true' (default disabled)
+try {
+  const enableCron = String(process.env.ENABLE_CRON || '').toLowerCase() === 'true';
+  if (enableCron) {
+    const cronExpr = getCronExpr();
+    console.log('⏲️  Cron activé avec intervalle:', cronExpr);
+    cron.schedule(cronExpr, () => {
+      try {
+        console.log('⏰ Cron: lancement du scraper');
+        const proc = spawn(process.execPath, ['scraper.js'], { cwd: process.cwd(), stdio: 'inherit' });
+        proc.on('exit', (code) => console.log('✅ Scraper terminé avec code', code));
+        proc.on('error', (e) => console.error('❌ Scraper spawn error:', e?.message || e));
+      } catch (e) {
+        console.error('❌ Cron handler error:', e?.message || e);
+      }
+    });
+  } else {
+    console.log('⏲️  Cron désactivé (ENABLE_CRON !== "true").');
+  }
+} catch (e) {
+  console.error('❌ Erreur lors de la configuration du cron:', e?.message || e);
+}

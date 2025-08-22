@@ -149,22 +149,45 @@ if ($reasons.ContainsKey('non-article')) { $rec += 'Ajuster les sélecteurs pour
 if ($reasons.ContainsKey('anchor-or-live') -or $reasons.ContainsKey('av-or-live')) { $rec += 'Continuer d’exclure /live et /av; envisager des règles plus spécifiques si trop agressif.' }
 if ($rec.Count -eq 0) { $rec += 'RAS: filtrage et déduplication semblent raisonnables.' }
 
-$diagText = @(
-  ("Collecte={0}, Skipped={1}, AprèsDédup={2}" -f $collect, $skipped, $after),
-  (if ($null -ne $enrichCapUsed) { ("Enrichment cap utilisé: {0}" -f $enrichCapUsed) }),
-  (if ($null -ne $postTotal) { ("Post: ok={0} ko={1} total={2}" -f $postOk, $postKo, $postTotal) }),
-  (if ($srcSummaries.Count -gt 0) { ("Par source: {0}" -f ($srcSummaries -join ', ')) }),
-  ("Principales raisons: {0}" -f $topReasons),
-  ("Recommandations: {0}" -f ($rec -join ' | '))
-) -join "`r`n"
+$diagLines = @()
+$diagLines += ("Collecte={0}, Skipped={1}, AprèsDédup={2}" -f $collect, $skipped, $after)
+if ($null -ne $enrichCapUsed) { $diagLines += ("Enrichment cap utilisé: {0}" -f $enrichCapUsed) }
+if ($null -ne $postTotal) { $diagLines += ("Post: ok={0} ko={1} total={2}" -f $postOk, $postKo, $postTotal) }
+if ($srcSummaries.Count -gt 0) { $diagLines += ("Par source: {0}" -f ($srcSummaries -join ', ')) }
+$diagLines += ("Principales raisons: {0}" -f $topReasons)
+$diagLines += ("Recommandations: {0}" -f ($rec -join ' | '))
+$diagText = $diagLines -join "`r`n"
 
 $diagHeader = ("=== Diagnostic {0} ===" -f (Get-Date -Format 's'))
-$finalDiag = if ([string]::IsNullOrWhiteSpace($diagText)) { "$diagHeader`r`n(empty: no markers found in scrape log)" } else { "$diagHeader`r`n$diagText" }
+if ([string]::IsNullOrWhiteSpace($diagText)) {
+  $finalDiag = "$diagHeader`r`n(empty: no markers found in scrape log)"
+} else {
+  $finalDiag = "$diagHeader`r`n$diagText"
+}
 
 $diagFile = Join-Path $LogDir ("diagnostic-{0}.txt" -f $stamp)
 $finalDiag | Set-Content -Path $diagFile -Encoding UTF8
 $diagLen = (Get-Item $diagFile).Length
 Write-Host ("Diagnostic sauvegardé: {0} (taille={1} octets)" -f $diagFile, $diagLen)
+
+# Fallback: if diagnostic missing or empty, try generator script
+if (-not (Test-Path $diagFile) -or ((Get-Item $diagFile).Length -lt 10)) {
+  Write-Warning "Diagnostic vide ou introuvable, tentative via generate-diagnostic.ps1..."
+  $gen = Join-Path $Root 'generate-diagnostic.ps1'
+  if (Test-Path $gen) {
+    try {
+      & $gen -OutFile $diagFile 2>$null
+      if (Test-Path $diagFile) {
+        $diagLen = (Get-Item $diagFile).Length
+        Write-Host ("Diagnostic (fallback) sauvegardé: {0} (taille={1} octets)" -f $diagFile, $diagLen)
+      }
+    } catch {
+      Write-Warning "Echec du generate-diagnostic.ps1: $_"
+    }
+  } else {
+    Write-Warning "generate-diagnostic.ps1 introuvable au chemin: $gen"
+  }
+}
 
 Write-Host "[6/7] Sauvegarde zip (backup)..."
 Push-Location $Root
