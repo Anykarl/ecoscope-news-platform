@@ -1,11 +1,11 @@
-﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250822-201559.log
-Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250822-201559.txt
-Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_21_2025-08-22_auto.zip
-Git: branch=principal commit=29e4a8f
+﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250822-202316.log
+Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250822-202316.txt
+Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_23_2025-08-22_auto.zip
+Git: branch=principal commit=6d9f261
 
 --- Diagnostic Content ---
-=== Diagnostic 2025-08-22T20:17:03 ===
-RuntimeSeconds=63
+=== Diagnostic 2025-08-22T20:24:13 ===
+RuntimeSeconds=57
 Collecte=16, Skipped=436, AprÃ¨sDÃ©dup=16
 Enrichment cap utilisÃ©: 50
 Post: ok=11 ko=5 total=16
