@@ -65,7 +65,7 @@ async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
       lastErr = err;
       const status = err?.response?.status;
       const isNetwork = !status;
-      const isTransient = isNetwork || status >= 500 || status === 429;
+      const isTransient = isNetwork || status >= 500 || status === 429 || status === 408;
       if (!isTransient) {
         // Erreur permanente (ex: 400/422 validation): ne pas réessayer
         throw err;
@@ -74,8 +74,16 @@ async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
         console.error(`❌ Échec après ${maxRetries} tentatives`);
         throw err;
       }
-      const delayMs = baseDelay * Math.pow(2, attempt - 1);
-      console.warn(`⚠️ Tentative ${attempt} échouée, nouvel essai dans ${delayMs}ms...`);
+      // Si 429, respecter Retry-After si disponible
+      let delayMs = baseDelay * Math.pow(2, attempt - 1);
+      const retryAfter = err?.response?.headers?.['retry-after'] || err?.response?.headers?.['Retry-After'];
+      if (status === 429 && retryAfter) {
+        const ra = Number(retryAfter);
+        if (!Number.isNaN(ra) && ra > 0) {
+          delayMs = Math.max(delayMs, ra * 1000);
+        }
+      }
+      console.warn(`⚠️ Tentative ${attempt} échouée (status=${status || 'network'}), nouvel essai dans ${delayMs}ms...`);
       await delay(delayMs);
     }
   }
@@ -437,6 +445,17 @@ async function sendArticle(payload) {
     console.error('POST /api/news KO', res.status, res.data);
     return false;
   } catch (e) {
+    // Cas idempotent: doublon déjà présent
+    if (e?.response?.status === 409) {
+      console.warn('ℹ️ Doublon détecté (409), traité comme succès pour', String(payload?.title || '').slice(0,80));
+      return true;
+    }
+    if (e?.response?.status === 429) {
+      console.warn('⚠️ Rate limited (429) pour', String(payload?.title || '').slice(0,80));
+    }
+    if (e?.code === 'ECONNABORTED' || e?.response?.status === 408) {
+      console.warn('⚠️ Timeout de publication pour', String(payload?.title || '').slice(0,80));
+    }
     logErrorWithContext(e, {
       articleTitle: String(payload?.title || '').slice(0, 80),
       source: getDomainFromUrl(payload?.sourceUrl || ''),
