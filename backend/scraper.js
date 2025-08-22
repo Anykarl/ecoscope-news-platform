@@ -25,6 +25,49 @@ const BATCH_DELAY_MS = 750;
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Logging d'erreur détaillé avec contexte (HTTP status, data, stack)
+function logErrorWithContext(error, context = {}) {
+  try {
+    const msg = error?.message || String(error);
+    console.error('❌ ERREUR:', msg);
+    console.error('📋 Contexte:', JSON.stringify(context));
+    if (error?.response) {
+      const status = error.response.status;
+      let data;
+      try { data = JSON.stringify(error.response.data); } catch { data = String(error.response.data); }
+      console.error('📡 Statut HTTP:', status);
+      console.error('📦 Données de réponse:', data);
+    }
+    if (error?.stack) {
+      console.error('🔍 Stack trace:', error.stack);
+    }
+  } catch (e) {
+    // Fallback minimal
+    console.error('❌ ERREUR (fallback log):', error?.message || String(error));
+  }
+}
+
+// Réessai avec backoff exponentiel
+async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxRetries) {
+        console.error(`❌ Échec après ${maxRetries} tentatives`);
+        throw err;
+      }
+      const delayMs = baseDelay * Math.pow(2, attempt - 1);
+      console.warn(`⚠️ Tentative ${attempt} échouée, nouvel essai dans ${delayMs}ms...`);
+      await delay(delayMs);
+    }
+  }
+  // Ne devrait pas arriver
+  throw lastErr;
+}
+
 async function mapWithConcurrency(arr, limit, fn, betweenBatchesDelay = BATCH_DELAY_MS) {
   const out = [];
   for (let i = 0; i < arr.length; i += limit) {
@@ -352,7 +395,15 @@ async function sendArticle(payload) {
     console.error('POST /api/news KO', res.status, res.data);
     return false;
   } catch (e) {
-    console.error('Erreur POST /api/news:', e.message);
+    logErrorWithContext(e, {
+      articleTitle: String(payload?.title || '').slice(0, 80),
+      source: getDomainFromUrl(payload?.sourceUrl || ''),
+      url: payload?.sourceUrl || null,
+      category: payload?.category || null,
+      lang: payload?.lang || null,
+      api: API_URL,
+      timestamp: new Date().toISOString(),
+    });
     return false;
   }
 }
@@ -443,7 +494,11 @@ async function runOnce() {
     allPayloads,
     MAX_POST_CONCURRENCY,
     async (p) => {
-      const sent = await sendArticle(p);
+      // Réessai avec backoff pour améliorer le taux de succès et capturer des erreurs transitoires
+      const sent = await retryWithBackoff(() => sendArticle(p), 3, 1000).catch((err) => {
+        // L'opération a jeté après les tentatives: déjà loggée par sendArticle/logErrorWithContext
+        return false;
+      });
       if (sent) ok++; else ko++;
       return sent;
     }
