@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+$pipelineStart = Get-Date
 
 # Resolve project root as parent of this script's directory
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -150,9 +151,48 @@ if ($reasons.ContainsKey('anchor-or-live') -or $reasons.ContainsKey('av-or-live'
 if ($rec.Count -eq 0) { $rec += 'RAS: filtrage et déduplication semblent raisonnables.' }
 
 $diagLines = @()
+
+# Runtime since start of this script
+$elapsedSec = [int]((Get-Date) - $pipelineStart).TotalSeconds
+$diagLines += ("RuntimeSeconds={0}" -f $elapsedSec)
+
 $diagLines += ("Collecte={0}, Skipped={1}, AprèsDédup={2}" -f $collect, $skipped, $after)
 if ($null -ne $enrichCapUsed) { $diagLines += ("Enrichment cap utilisé: {0}" -f $enrichCapUsed) }
 if ($null -ne $postTotal) { $diagLines += ("Post: ok={0} ko={1} total={2}" -f $postOk, $postKo, $postTotal) }
+
+# Overall post success rate if available
+if ($null -ne $postTotal -and $postTotal -gt 0 -and $null -ne $postOk) {
+  $succ = [math]::Round((100.0 * $postOk / [double]$postTotal), 1)
+  $diagLines += ("Post success rate: {0}%" -f $succ)
+}
+
+# Per-source percentages (based on collected share)
+if ($srcSummaries.Count -gt 0 -and $collect -gt 0) {
+  $srcPct = @()
+  foreach($item in $srcSummaries){
+    $parts = $item -split '='
+    if ($parts.Count -eq 2) {
+      $name = $parts[0]; $cnt = [int]$parts[1]
+      $p = [math]::Round((100.0 * $cnt / [double]$collect), 1)
+      $srcPct += ("{0}={1}%" -f $name, $p)
+    }
+  }
+  if ($srcPct.Count -gt 0) { $diagLines += ("Par source (%): {0}" -f ($srcPct -join ', ')) }
+}
+
+# Videos vs Articles (heuristic: sources containing 'video' are considered videos)
+if ($srcSummaries.Count -gt 0) {
+  $videoCollected = 0
+  foreach($item in $srcSummaries){
+    $parts = $item -split '='
+    if ($parts.Count -eq 2) {
+      $name = $parts[0]; $cnt = [int]$parts[1]
+      if ($name -match '(?i)video') { $videoCollected += $cnt }
+    }
+  }
+  $articleCollected = [math]::Max(0, $collect - $videoCollected)
+  $diagLines += ("Contenus: videos={0} articles={1}" -f $videoCollected, $articleCollected)
+}
 if ($srcSummaries.Count -gt 0) { $diagLines += ("Par source: {0}" -f ($srcSummaries -join ', ')) }
 $diagLines += ("Principales raisons: {0}" -f $topReasons)
 $diagLines += ("Recommandations: {0}" -f ($rec -join ' | '))
