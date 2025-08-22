@@ -19,11 +19,19 @@ const VIDEO_ENABLED = String(process.env.VIDEO_ENABLED || 'true').toLowerCase() 
 const VIDEO_KEYWORDS = String(process.env.VIDEO_KEYWORDS || 'climat,climate,environment,environnement,énergie,energie,pollution,biodiversité,biodiversity,eau,water,agriculture,canicule,heatwave,incendie,wildfire,nucléaire,nuclear,plastique,plastic').split(',').map(s => s.trim()).filter(Boolean);
 
 // Concurrence contrôlée et délais polis entre lots
-const MAX_ENRICH_CONCURRENCY = 4;
-const MAX_POST_CONCURRENCY = 4;
-const BATCH_DELAY_MS = 750;
+const MAX_ENRICH_CONCURRENCY = Number(process.env.MAX_ENRICH_CONCURRENCY || 4);
+const MAX_POST_CONCURRENCY = Number(process.env.MAX_POST_CONCURRENCY || process.env.POST_CONCURRENCY || 3);
+const BATCH_DELAY_MS = Number(process.env.BATCH_DELAY_MS || process.env.POST_BATCH_DELAY_MS || 1000);
+const POST_THROTTLE_MS = Number(process.env.POST_THROTTLE_MS || 0); // délai par article (en plus du délai entre lots)
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Instance axios dédiée aux POST (timeouts plus généreux)
+const axiosPost = axios.create({
+  timeout: Number(process.env.POST_TIMEOUT_MS || 30000),
+  timeoutErrorMessage: 'Timeout dépassé lors de la publication',
+  headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+});
 
 // Logging d'erreur détaillé avec contexte (HTTP status, data, stack)
 function logErrorWithContext(error, context = {}) {
@@ -47,7 +55,7 @@ function logErrorWithContext(error, context = {}) {
   }
 }
 
-// Réessai avec backoff exponentiel
+// Réessai avec backoff exponentiel (transient uniquement: 5xx/429 ou erreurs réseau)
 async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
   let lastErr;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -55,6 +63,13 @@ async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
       return await operation();
     } catch (err) {
       lastErr = err;
+      const status = err?.response?.status;
+      const isNetwork = !status;
+      const isTransient = isNetwork || status >= 500 || status === 429;
+      if (!isTransient) {
+        // Erreur permanente (ex: 400/422 validation): ne pas réessayer
+        throw err;
+      }
       if (attempt === maxRetries) {
         console.error(`❌ Échec après ${maxRetries} tentatives`);
         throw err;
@@ -66,6 +81,30 @@ async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
   }
   // Ne devrait pas arriver
   throw lastErr;
+}
+
+// Validation préalable (évite les erreurs 4xx inutiles)
+function validatePayload(p) {
+  const missing = [];
+  if (!p?.title) missing.push('title');
+  if (!p?.content) missing.push('content');
+  if (!p?.sourceUrl) missing.push('sourceUrl');
+  if (!p?.category) missing.push('category');
+  if (missing.length) {
+    const err = new Error('Champs manquants: ' + missing.join(', '));
+    err.code = 'VALIDATION_PAYLOAD_MISSING';
+    throw err;
+  }
+  if (String(p.title).trim().length < 5) {
+    const err = new Error('Titre trop court');
+    err.code = 'VALIDATION_TITLE_SHORT';
+    throw err;
+  }
+  if (String(p.content).trim().length < 5) {
+    const err = new Error('Content trop court');
+    err.code = 'VALIDATION_CONTENT_SHORT';
+    throw err;
+  }
 }
 
 async function mapWithConcurrency(arr, limit, fn, betweenBatchesDelay = BATCH_DELAY_MS) {
@@ -387,7 +426,10 @@ async function scrapeBBC() {
 
 async function sendArticle(payload) {
   try {
-    const res = await axios.post(API_URL, payload, { headers: { 'Content-Type': 'application/json', 'User-Agent': UA }, timeout: 12000 });
+    // Validation locale (levée d'exception si invalide)
+    validatePayload(payload);
+    // Appel POST (timeout augmenté)
+    const res = await axiosPost.post(API_URL, payload);
     if (res.status >= 200 && res.status < 300 && res.data?.success !== false) {
       console.log('✅ Article posté:', payload.title);
       return true;
@@ -495,10 +537,11 @@ async function runOnce() {
     MAX_POST_CONCURRENCY,
     async (p) => {
       // Réessai avec backoff pour améliorer le taux de succès et capturer des erreurs transitoires
-      const sent = await retryWithBackoff(() => sendArticle(p), 3, 1000).catch((err) => {
+      const sent = await retryWithBackoff(() => sendArticle(p), 3, Number(process.env.POST_RETRY_BASE_DELAY_MS || 1000)).catch((err) => {
         // L'opération a jeté après les tentatives: déjà loggée par sendArticle/logErrorWithContext
         return false;
       });
+      if (POST_THROTTLE_MS > 0) { await delay(POST_THROTTLE_MS); }
       if (sent) ok++; else ko++;
       return sent;
     }
