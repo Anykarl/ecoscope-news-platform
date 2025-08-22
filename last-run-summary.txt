@@ -1,14 +1,14 @@
-﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250822-180420.log
-Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250822-180420.txt
-Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_11_2025-08-22_auto.zip
-Git: branch=principal commit=3305eb9
+﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250822-181523.log
+Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250822-181523.txt
+Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_13_2025-08-22_auto.zip
+Git: branch=principal commit=aa983f6
 
 --- Diagnostic Content ---
-=== Diagnostic 2025-08-22T18:05:13 ===
-Collecte=16, Skipped=437, AprÃ¨sDÃ©dup=16
+=== Diagnostic 2025-08-22T18:16:27 ===
+Collecte=16, Skipped=213, AprÃ¨sDÃ©dup=16
 Enrichment cap utilisÃ©: 50
 Post: ok=0 ko=16 total=16
 Par source: LeMondeVideo=5, HuffPostVideoFR=0
-Principales raisons: non-planete(225), non-science/environment(130), dup-in-page(33), bad-title(22), video-not-whitelisted(17)
+Principales raisons: non-science/environment(130), dup-in-page(33), bad-title(22), video-not-whitelisted(17), non-news(10)
 Recommandations: RAS: filtrage et dÃ©duplication semblent raisonnables.
 
