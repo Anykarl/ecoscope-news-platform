@@ -158,6 +158,9 @@ try {
   Log "[8/8] Sauvegarde finale + commit Git..."
   npm run backup -- "auto_session" | Out-Null
   git add .
+  # Ensure desired Git identity for this commit
+  git config user.email "2anykarl1994@gmail.com"
+  git config user.name "2anykarl"
   git commit -m "session: auto pipeline ecoscope-test" -m "Run 5002 + logs/diagnostics/backup" | Out-Null
   Write-Host "Terminé avec succès."
 } catch { Write-Warning "Backup/commit final a échoué: $_"; exit 0 }

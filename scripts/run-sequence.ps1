@@ -257,7 +257,12 @@ if ($currentBranch -ne 'principal') {
 git add .
 $commitMsg = "sauvegarde_${NN}_${dateStr}_ajustements_filtrage_et_logs"
 # Add a one-line comment header by using -m twice: first line then the subject line
-try { git commit -m "Automatisation: logs, analyse, backup" -m $commitMsg | Out-Null } catch { }
+try {
+  # Ensure desired Git identity for this commit
+  git config user.email "2anykarl1994@gmail.com"
+  git config user.name "2anykarl"
+  git commit -m "Automatisation: logs, analyse, backup" -m $commitMsg | Out-Null
+} catch { }
 Pop-Location
 
 Write-Host "RESUME:"
