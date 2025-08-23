@@ -1,18 +1,15 @@
-﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250822-202316.log
-Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250822-202316.txt
-Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_23_2025-08-22_auto.zip
-Git: branch=principal commit=6d9f261
+﻿Log file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\scrape-20250823-221234.log
+Diagnostic file: C:\Users\LENOVO\CascadeProjects\ecoscope-test\logs\diagnostic-20250823-221234.txt
+Latest backup: C:\Users\LENOVO\CascadeProjects\ecoscope-test\backups\sauvegarde_25_2025-08-23_auto.zip
+Git: branch=principal commit=f4e1783
 
 --- Diagnostic Content ---
-=== Diagnostic 2025-08-22T20:24:13 ===
-RuntimeSeconds=57
-Collecte=16, Skipped=436, AprÃ¨sDÃ©dup=16
+=== Diagnostic 2025-08-23T22:13:40 ===
+RuntimeSeconds=66
+Collecte=10, Skipped=24, AprÃ¨sDÃ©dup=10
 Enrichment cap utilisÃ©: 50
-Post: ok=11 ko=5 total=16
-Post success rate: 68,8%
-Par source (%): LeMondeVideo=31,2%, HuffPostVideoFR=0%
-Contenus: videos=5 articles=11
-Par source: LeMondeVideo=5, HuffPostVideoFR=0
-Principales raisons: non-planete(225), non-science/environment(129), dup-in-page(33), bad-title(22), video-not-whitelisted(17)
+Post: ok=8 ko=2 total=10
+Post success rate: 80%
+Principales raisons: dup-in-page(10), bad-title(10), error:timeout(4)
 Recommandations: RAS: filtrage et dÃ©duplication semblent raisonnables.
 
