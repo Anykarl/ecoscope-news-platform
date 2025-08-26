@@ -1,0 +1,17 @@
+[build]
+  command = "cd frontend && npm run build"
+  publish = "frontend/dist"
+
+[build.environment]
+  NODE_VERSION = "18"
+  VITE_API_URL = "https://ecoscope-news-platform-production.up.railway.app"
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://ecoscope-news-platform-production.up.railway.app/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
