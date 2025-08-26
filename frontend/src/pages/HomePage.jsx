@@ -1,4 +1,11 @@
 import { useEffect, useState } from 'react';
+/**
+ * Interface complète restaurée avec indicateur d'état API discret
+ * - Indicateur en bas à droite montre l'état de connexion
+ * - Cliquer sur l'indicateur recharge la page
+ * - Vérification automatique toutes les 30 secondes
+ */
+
 
 export default function HomePage() {
   const [articles, setArticles] = useState([]);
@@ -26,7 +33,7 @@ export default function HomePage() {
   const [regionFilter, setRegionFilter] = useState(() => localStorage.getItem('filters.region') || 'all');
   const [countryFilter, setCountryFilter] = useState(() => localStorage.getItem('filters.country') || 'all');
   const [articleQuery, setArticleQuery] = useState('');
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002';
 
   const fetchNews = () => {
     const url = new URL(`${apiUrl}/api/news`);

@@ -1,8 +1,57 @@
 import React from 'react';
 import ArticleAdminForm from '../components/ArticleAdminForm.jsx';
+import StatisticsDashboard from '../components/StatisticsDashboard.jsx';
+import RefreshButton from '../components/RefreshButton.jsx';
+
+// Hook pour vérifier l'état de l'API
+const useApiHealth = () => {
+  const [apiStatus, setApiStatus] = React.useState('checking');
+
+  React.useEffect(() => {
+    const checkApi = async () => {
+      try {
+        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002';
+        const response = await fetch(`${apiUrl}/health`);
+        setApiStatus(response.ok ? 'online' : 'error');
+      } catch {
+        setApiStatus('error');
+      }
+    };
+
+    checkApi();
+    const interval = setInterval(checkApi, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return apiStatus;
+};
+
+// Composant indicateur d'état API
+const ApiStatusIndicator = () => {
+  const apiStatus = useApiHealth();
+  if (apiStatus === 'checking') return null;
+  return (
+    <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${
+      apiStatus === 'online' 
+        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+    }`}>
+      <span>{apiStatus === 'online' ? '✅' : '❌'}</span>
+      API: {apiStatus === 'online' ? 'Connectée' : 'Déconnectée'}
+      {apiStatus !== 'online' && (
+        <button 
+          onClick={() => window.location.reload()}
+          className="ml-2 text-xs underline hover:no-underline"
+        >
+          Recharger
+        </button>
+      )}
+    </div>
+  );
+};
 
 export default function AdminPage() {
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002';
   const [backups, setBackups] = React.useState([]);
   const [selected, setSelected] = React.useState('');
   const [loading, setLoading] = React.useState(false);
@@ -43,8 +92,15 @@ export default function AdminPage() {
 
   return (
     <div className="p-5 text-gray-900 dark:text-gray-100">
-      <h1 className="text-2xl font-bold mb-4">EcoScope Admin</h1>
-      <ArticleAdminForm />
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">EcoScope Admin</h1>
+        <ApiStatusIndicator />
+      </div>
+      <div className="grid gap-6">
+        <ArticleAdminForm />
+        <RefreshButton />
+        <StatisticsDashboard />
+      </div>
 
       <div className="mt-8 border-t pt-6">
         <h2 className="text-xl font-semibold mb-3">Sauvegardes du projet</h2>

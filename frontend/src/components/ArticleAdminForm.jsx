@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
 export default function ArticleAdminForm() {
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002';
   const [pendingArticles, setPendingArticles] = useState([]);
   const [loading, setLoading] = useState(false);
 

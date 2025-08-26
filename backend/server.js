@@ -1,14 +1,80 @@
+console.log('Démarrage du serveur...');
+
+// Chargement des variables d'environnement
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import fs from 'fs';
+
+// Configuration du chemin vers le fichier .env
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const envPath = path.join(__dirname, '..', '.env');
+
+console.log('Dossier courant:', process.cwd());
+console.log('Chemin du fichier .env:', envPath);
+
+// Vérification et création du fichier .env si nécessaire
+try {
+  if (!fs.existsSync(envPath)) {
+    console.log('Création du fichier .env...');
+    fs.writeFileSync(envPath, 'PORT=5002\nNODE_ENV=development\nVITE_API_URL=http://localhost:5002');
+    console.log('Fichier .env créé avec succès');
+  }
+  
+  // Chargement des variables d'environnement
+  const result = dotenv.config({ path: envPath });
+  if (result.error) {
+    console.error('Erreur dotenv:', result.error);
+    throw result.error;
+  }
+  
+  console.log('✅ Fichier .env chargé avec succès');
+  console.log('🔧 Configuration:');
+  console.log('   - PORT:', process.env.PORT);
+  console.log('   - NODE_ENV:', process.env.NODE_ENV);
+  console.log('   - VITE_API_URL:', process.env.VITE_API_URL);
+  
+  // Vérification des variables requises
+  const requiredVars = ['PORT', 'NODE_ENV'];
+  const missingVars = requiredVars.filter(varName => !process.env[varName]);
+  
+  if (missingVars.length > 0) {
+    throw new Error(`Variables manquantes: ${missingVars.join(', ')}`);
+  }
+  
+} catch (error) {
+  console.error('❌ Erreur lors du chargement de la configuration:', error.message);
+  process.exit(1);
+}
+
+// Autres imports
 import express from 'express';
 import cors from 'cors';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { TextDecoder, TextEncoder } from 'node:util';
 import { ReadableStream, TransformStream } from 'node:stream/web';
 import { Blob, File } from 'node:buffer';
 import { fetch, Headers, FormData, Request, Response } from 'undici';
+import { createServer } from 'net';
+import ArticleStats from './models/ArticleStats.js';
+import { createAdminRouter } from './routes/admin.js';
+import { createStatsRouter } from './routes/stats.js';
+import { createRefreshRouter } from './routes/refresh.js';
+
+// Vérification des variables d'environnement requises
+const requiredEnvVars = ['PORT', 'NODE_ENV'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error(`Erreur: Les variables d'environnement suivantes sont manquantes: ${missingEnvVars.join(', ')}`);
+  process.exit(1);
+}
+
+console.log('Configuration chargée:');
+console.log(`- NODE_ENV: ${process.env.NODE_ENV}`);
+console.log(`- PORT: ${process.env.PORT}`);
 
 // Polyfill Undici/Web: n'assigne que si manquant (évite TypeError si déjà définis)
 if (typeof globalThis.TextDecoder === 'undefined') globalThis.TextDecoder = TextDecoder;
@@ -24,22 +90,31 @@ if (typeof globalThis.Request === 'undefined') globalThis.Request = Request;
 if (typeof globalThis.Response === 'undefined') globalThis.Response = Response;
 
 const app = express();
-app.use(cors());
+// CORS: authorize frontend origin and credentials
+const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
+app.use(cors({ origin: allowedOrigin, credentials: true }));
 app.use(express.json());
 
 // Robust error handling: prevent process crash on unhandled errors, log them instead
 process.on('uncaughtException', (err) => {
   console.error('UncaughtException:', err?.stack || err);
 });
+
+// Routers mounted later once dataDir/api and SSE are ready (see after backups endpoints)
+
 process.on('unhandledRejection', (reason) => {
   console.error('UnhandledRejection:', reason);
 });
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const backupsDir = path.join(__dirname, 'backups');
+const backupsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'backups');
 const backupsIndexPath = path.join(backupsDir, 'index.json');
 const backupsSelectedPath = path.join(backupsDir, 'selected.json');
+const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data');
+// Expose uploads statics (for media saved by admin)
+try {
+  fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
+} catch {}
+app.use('/uploads', express.static(path.join(dataDir, 'uploads')));
 
 // Route test santé
 app.get('/health', (req, res) => {
@@ -77,7 +152,56 @@ const categories = [
   // i. Tourisme durable
   "Écotourisme",
   "Pays à visiter",
+  // --- ajouts demandés ---
+  "Risques naturels",
+  "Tsunamis",
+  "Phénomènes météorologiques",
+  "Géologie",
+  "Catastrophes naturelles",
+  "Prévention des risques",
 ];
+
+// Minimal API for article operations (used by routers)
+const api = {
+  getArticles() { return articles.slice(); },
+  findArticle(id) { return articles.find(a => a.id === Number(id)); },
+  addArticle(payload) {
+    const { title, content, lang, category, imageUrl, author, publishedAt, sourceUrl } = payload || {};
+    if (!title || !content || !lang || !category) throw new Error('Champs requis: title, content, lang, category');
+    const art = {
+      id: nextId++,
+      title,
+      content,
+      lang: String(lang).toLowerCase(),
+      category,
+      imageUrl: imageUrl || null,
+      author: author || null,
+      publishedAt: publishedAt || new Date().toISOString(),
+      sourceUrl: sourceUrl || null,
+    };
+    articles.push(art);
+    sseSend('news', { title: art.title, category: art.category });
+    return art;
+  },
+  updateArticle(id, patch) {
+    const a = articles.find(x => x.id === Number(id));
+    if (!a) return null;
+    Object.assign(a, patch || {});
+    return a;
+  },
+  deleteArticle(id) {
+    const idx = articles.findIndex(x => x.id === Number(id));
+    if (idx === -1) return false;
+    articles.splice(idx, 1);
+    return true;
+  },
+  // Expose data directory for admin uploads
+  getDataDir() {
+    return dataDir;
+  },
+};
+
+// (api helper will be defined after articles array)
 
 // Groupes de catégories pour Cameroun / Afrique centrale / International
 const categoryGroups = [
@@ -377,19 +501,70 @@ app.post('/api/backups/select', (req, res) => {
   }
 });
 
-const PORT = Number(process.env.PORT || process.env.BACKEND_PORT || 5001);
-console.log('🔧 ENV:', { PORT, BACKEND_PORT: process.env.BACKEND_PORT, ENABLE_CRON: process.env.ENABLE_CRON });
-app
-  .listen(PORT, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${PORT}`))
-  .on('error', (err) => {
-    if (err && err.code === 'EADDRINUSE') {
-      console.error(`❌ Port ${PORT} déjà occupé. Veuillez libérer le port.`);
-      process.exit(1);
-    } else {
-      console.error('❌ Erreur de démarrage:', err?.stack || err);
-      process.exit(1);
+// --- Routers additionnels: refresh (scraper), stats, admin ---
+// Helper pour lancer le scraper une fois (utilisé par /api/refresh)
+function runScraperOnce() {
+  return new Promise((resolve, reject) => {
+    try {
+      const proc = spawn(process.execPath, ['scraper.js'], { cwd: __dirname, stdio: 'inherit' });
+      proc.on('exit', (code) => resolve(code ?? 0));
+      proc.on('error', (e) => reject(e));
+    } catch (e) {
+      reject(e);
     }
   });
+}
+
+// Instancie le modèle de statistiques et monte les routes
+const stats = new ArticleStats({ persistDir: path.join(dataDir, 'stats') });
+app.use('/api/refresh', createRefreshRouter(runScraperOnce));
+app.use('/api/stats', createStatsRouter(stats, api));
+app.use('/api/admin', createAdminRouter(api));
+
+// Gestion de port: fixé à 5002 par défaut (peut être surchargé par PORT)
+// Note: On retire BACKEND_PORT pour éviter les décalages involontaires.
+const PORT = process.env.PORT || 5002;
+console.log('🔧 ENV:', { PORT, BACKEND_PORT: process.env.BACKEND_PORT, ENABLE_CRON: process.env.ENABLE_CRON });
+
+function checkPort(port) {
+  return new Promise((resolve) => {
+    const tester = createServer()
+      .once('error', (err) => {
+        if (err && err.code === 'EADDRINUSE') resolve(false); else resolve(true);
+      })
+      .once('listening', () => {
+        tester.close(() => resolve(true));
+      })
+      .listen(port, '0.0.0.0');
+  });
+}
+
+async function startServer() {
+  let port = Number(PORT) || 5002;
+  let attempts = 0;
+  while (attempts < 5) {
+    // Vérifie si le port est libre
+    // En cas d'occupation, tente le port suivant
+    // Ajoute un petit délai pour laisser les processus se terminer
+    // avant de réessayer
+    // (utile après un clean-ports)
+    // eslint-disable-next-line no-await-in-loop
+    const free = await checkPort(port);
+    if (free) break;
+    console.log(`⚠️  Port ${port} occupé, essai ${attempts + 1}/5 → port ${port + 1}`);
+    port += 1;
+    attempts += 1;
+  }
+
+  app
+    .listen(port, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${port}`))
+    .on('error', (err) => {
+      console.error('❌ Erreur de démarrage:', err?.stack || err);
+      process.exit(1);
+    });
+}
+
+startServer();
 
 // Planification gratuite via node-cron: toutes les 15–30 minutes (configurable)
 // Env: SCRAPE_INTERVAL_MINUTES (15 à 30); défaut: 30

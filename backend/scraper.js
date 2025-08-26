@@ -6,11 +6,39 @@
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import crypto from 'crypto';
+import { ProxyAgent } from 'proxy-agent';
+import { promises as dns } from 'dns';
 
 // Forcer IPv4 pour éviter ::1
-const API_URL = process.env.ECOSCOPE_API_URL || 'http://127.0.0.1:5001/api/news';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 EcoScopeScraper/1.1';
-const REQ_OPTS = { timeout: 12000, headers: { 'User-Agent': UA, 'Accept-Language': 'fr,en;q=0.8' } };
+// Utilise ECOSCOPE_API_URL si fourni, sinon fallback vers backend par défaut en 5002
+const API_URL = process.env.ECOSCOPE_API_URL || 'http://127.0.0.1:5002/api/news';
+const UA = process.env.SCRAPER_UA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0 EcoScopeScraper/1.2';
+
+// --- Proxy support (entreprise) ---
+// Respecte HTTP_PROXY / HTTPS_PROXY / NO_PROXY. Si défini, on branche un Agent proxy.
+let httpAgent;
+let httpsAgent;
+try {
+  const proxyEnv = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.http_proxy || process.env.https_proxy;
+  if (proxyEnv) {
+    const agent = new ProxyAgent(proxyEnv);
+    httpAgent = agent;
+    httpsAgent = agent;
+    console.log('🌐 Proxy détecté via env:', proxyEnv.replace(/\S{3,}:(\/\/)?/g, '***://'));
+  }
+} catch (e) {
+  console.warn('Proxy init warning:', e?.message || e);
+}
+
+const BASE_TIMEOUT_MS = Number(process.env.SCRAPER_TIMEOUT_MS || 60000);
+const REQ_OPTS = {
+  timeout: BASE_TIMEOUT_MS,
+  headers: { 'User-Agent': UA, 'Accept-Language': 'fr,en;q=0.8' },
+  proxy: false, // important pour utiliser les agents
+  httpAgent,
+  httpsAgent,
+};
 // Plafond global d'articles enrichis (meta + image) par session
 // Configurable via ENRICH_CAP ou MAX_ENRICH (défaut 30)
 const ENRICH_CAP = Number(process.env.ENRICH_CAP || process.env.MAX_ENRICH || 30);
@@ -26,12 +54,66 @@ const POST_THROTTLE_MS = Number(process.env.POST_THROTTLE_MS || 0); // délai pa
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Instance axios dédiée aux POST (timeouts plus généreux)
+// Instance axios dédiée aux GET/POST avec timeouts 60s et proxy/UA
+const http = axios.create({
+  timeout: BASE_TIMEOUT_MS,
+  headers: { 'User-Agent': UA, 'Accept-Language': 'fr,en;q=0.8' },
+  proxy: false,
+  httpAgent,
+  httpsAgent,
+});
 const axiosPost = axios.create({
-  timeout: Number(process.env.POST_TIMEOUT_MS || 30000),
+  timeout: Number(process.env.POST_TIMEOUT_MS || BASE_TIMEOUT_MS),
   timeoutErrorMessage: 'Timeout dépassé lors de la publication',
   headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+  proxy: false,
+  httpAgent,
+  httpsAgent,
 });
+
+// Intercepteurs pour journalisation détaillée
+function attachLoggingInterceptors(instance, name) {
+  instance.interceptors.request.use((config) => {
+    const target = `${config.method?.toUpperCase()} ${config.url}`;
+    console.log(`➡️ [${name}]`, target, {
+      timeout: config.timeout,
+      proxy: Boolean(proxyActive()),
+    });
+    return config;
+  });
+  instance.interceptors.response.use(
+    (res) => {
+      console.log(`⬅️ [${name}] ${res.status} ${res.config?.url}`);
+      return res;
+    },
+    (error) => {
+      const url = error?.config?.url;
+      const code = error?.code || error?.response?.status;
+      console.warn(`❗ [${name}] échec ${code} ${url}:`, error?.message);
+      return Promise.reject(error);
+    }
+  );
+}
+
+function proxyActive() {
+  return Boolean(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.http_proxy || process.env.https_proxy);
+}
+
+attachLoggingInterceptors(http, 'GET');
+attachLoggingInterceptors(axiosPost, 'POST');
+
+// --- Mode test de connectivité (optionnel) ---
+if (process.argv.includes('--test-connectivity')) {
+  console.log('=== MODE TEST DE CONNECTIVITÉ ===');
+  try {
+    await connectivityDiagnostics();
+    console.log('=== TEST TERMINÉ ===');
+    process.exit(0);
+  } catch (error) {
+    console.error('=== TEST ÉCHOUÉ ===', error?.message || error);
+    process.exit(1);
+  }
+}
 
 // Logging d'erreur détaillé avec contexte (HTTP status, data, stack)
 function logErrorWithContext(error, context = {}) {
@@ -54,6 +136,143 @@ function logErrorWithContext(error, context = {}) {
     console.error('❌ ERREUR (fallback log):', error?.message || String(error));
   }
 }
+
+// --- New sources: IPCC, UNEP, ScienceDaily (Climate), Phys.org (Climate change), YouTube API ---
+// Helper GET avec retry/backoff centralisé
+async function getWithRetry(url, opts = REQ_OPTS, retries = 3, baseDelay = 1000) {
+  return retryWithBackoff(() => http.get(url, { ...REQ_OPTS, ...(opts || {}) }), retries, baseDelay);
+}
+async function scrapeIPCC() {
+  const base = 'https://www.ipcc.ch/';
+  const news = 'https://www.ipcc.ch/news/';
+  try {
+    const { data } = await getWithRetry(news);
+    const $ = cheerio.load(data);
+    const seen = new Set();
+    const results = [];
+    const skipped = [];
+    $('a[href*="/news/"] , a.card-link').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
+      const href = normalizeUrl($(el).attr('href'), base);
+      const title = sanitizeTitle($(el).text());
+      if (!href || !/ipcc\.ch\//.test(href)) { skipped.push({ title, href, reason: 'invalid-href' }); return; }
+      if (!/\/news\//.test(href)) { skipped.push({ title, href, reason: 'non-news' }); return; }
+      if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
+      if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
+      results.push({ title, url: href, lang: 'en' });
+    });
+    return { results, skipped };
+  } catch (e) {
+    console.warn('IPCC: erreur scrape:', e.message);
+    return { results: [], skipped: [{ title: '', href: news, reason: 'error:' + e.message }] };
+  }
+}
+
+async function scrapeUNEP() {
+  const base = 'https://www.unep.org/';
+  const news = 'https://www.unep.org/news-and-stories';
+  try {
+    const { data } = await getWithRetry(news);
+    const $ = cheerio.load(data);
+    const seen = new Set();
+    const results = [];
+    const skipped = [];
+    $('a[href*="/news-and-stories/"]').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
+      const href = normalizeUrl($(el).attr('href'), base);
+      const title = sanitizeTitle($(el).text());
+      if (!href || !/unep\.org\//.test(href)) { skipped.push({ title, href, reason: 'invalid-href' }); return; }
+      if (/\/events\//.test(href)) { skipped.push({ title, href, reason: 'event' }); return; }
+      if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
+      if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
+      results.push({ title, url: href, lang: 'en' });
+    });
+    return { results, skipped };
+  } catch (e) {
+    console.warn('UNEP: erreur scrape:', e.message);
+    return { results: [], skipped: [{ title: '', href: news, reason: 'error:' + e.message }] };
+  }
+}
+
+async function scrapeScienceDaily() {
+  const base = 'https://www.sciencedaily.com';
+  const url = base + '/news/earth_climate/climate/';
+  try {
+    const { data } = await getWithRetry(url);
+    const $ = cheerio.load(data);
+    const seen = new Set();
+    const results = [];
+    const skipped = [];
+    $('a[href^="/releases/"]').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
+      const href = normalizeUrl($(el).attr('href'), base);
+      const title = sanitizeTitle($(el).text());
+      if (!href || !/sciencedaily\.com\//.test(href)) { skipped.push({ title, href, reason: 'invalid-href' }); return; }
+      if (isBadTitle(title)) { skipped.push({ title, href, reason: 'bad-title' }); return; }
+      if (seen.has(href)) { skipped.push({ title, href, reason: 'dup-in-page' }); return; } seen.add(href);
+      results.push({ title, url: href, lang: 'en' });
+    });
+    return { results, skipped };
+  } catch (e) {
+    console.warn('ScienceDaily: erreur scrape:', e.message);
+    return { results: [], skipped: [{ title: '', href: url, reason: 'error:' + e.message }] };
+  }
+}
+
+async function scrapePhysOrg() {
+  const base = 'https://phys.org';
+  const url = base + '/environment-news/climate-change/';
+  try {
+    const { data } = await getWithRetry(url);
+    const $ = cheerio.load(data);
+    const seen = new Set();
+    const results = [];
+    const skipped = [];
+    $('a[href*="/news/"]').each((_, el) => {
+      if (results.length >= MAX_PER_SOURCE) return false;
+      const href = normalizeUrl($(el).attr('href'), base);
+      const title = sanitizeTitle($(el).text());
+      if (!href || !/phys\.org\//.test(href)) { return; }
+      if (!/\/news\//.test(href)) { return; }
+      if (isBadTitle(title)) { return; }
+      if (seen.has(href)) { return; } seen.add(href);
+      results.push({ title, url: href, lang: 'en' });
+    });
+    return { results, skipped };
+  } catch (e) {
+    console.warn('Phys.org: erreur scrape:', e.message);
+    return { results: [], skipped: [{ title: '', href: url, reason: 'error:' + e.message }] };
+  }
+}
+
+// Optional YouTube Data API v3 integration (requires env: YT_API_KEY and YT_CHANNEL_ID)
+async function scrapeYouTubeAPI() {
+  const apiKey = process.env.YT_API_KEY;
+  const channelId = process.env.YT_CHANNEL_ID; // e.g., for @LeHuffPost once resolved
+  const maxResults = Number(process.env.YT_MAX_RESULTS || 10);
+  if (!apiKey || !channelId) {
+    console.log('YouTube API non configurée (YT_API_KEY/YT_CHANNEL_ID manquants) → skip');
+    return { results: [], skipped: [] };
+  }
+  try {
+    const searchUrl = `https://www.googleapis.com/youtube/v3/search?key=${encodeURIComponent(apiKey)}&channelId=${encodeURIComponent(channelId)}&part=snippet,id&order=date&type=video&maxResults=${maxResults}`;
+    const { data } = await getWithRetry(searchUrl, { timeout: BASE_TIMEOUT_MS });
+    const results = [];
+    const skipped = [];
+    for (const item of (data.items || [])) {
+      const vid = item.id?.videoId;
+      const title = sanitizeTitle(item.snippet?.title || '');
+      if (!vid || isBadTitle(title) || !isVideoRelevant(title)) { skipped.push({ title, href: '', reason: 'filtered' }); continue; }
+      const url = `https://www.youtube.com/watch?v=${vid}`;
+      results.push({ title, url, lang: 'fr', category: 'Vidéos' });
+    }
+    return { results, skipped };
+  } catch (e) {
+    console.warn('YouTube API: erreur:', e.message);
+    return { results: [], skipped: [{ title: '', href: 'youtube-api', reason: 'error:' + e.message }] };
+  }
+}
+// end helpers
 
 // Réessai avec backoff exponentiel (transient uniquement: 5xx/429 ou erreurs réseau)
 async function retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
@@ -136,7 +355,7 @@ async function scrapeVideos() {
   const allSkipped = [];
   for (const src of sources) {
     try {
-      const { data } = await axios.get(src.base, REQ_OPTS);
+      const { data } = await getWithRetry(src.base);
       const $ = cheerio.load(data);
       const seen = new Set();
       $(src.sel).each((_, el) => {
@@ -214,14 +433,171 @@ function isBadTitle(title) {
 function mapCategory(title) {
   const t = (title || '').toLowerCase();
   const has = (...keys) => keys.some(k => t.includes(k));
-  if (has('climate', 'climat', 'heatwave', 'canicule', 'réchauff', 'warming', 'greenhouse')) return 'Changement climatique';
-  if (has('pollution', 'plastique', 'microplastic', 'air quality', 'air', 'smog', 'eau', 'water', 'waste')) return 'Pollution';
-  if (has('biodivers', 'wildlife', 'espèce', 'faune', 'flore', 'habitat', 'ecosystem')) return 'Biodiversité';
-  if (has('énergie', 'energie', 'energy', 'solar', 'wind', 'nuclear', 'nucléaire', 'oil', 'gaz', 'gas', 'renewable', 'hydrogen')) return 'Énergie';
-  if (has('eau', 'water', 'sécheresse', 'drought', 'inond', 'flood', 'rivière', 'river', 'aquifer', 'nappe', 'groundwater', 'wetland', 'marais', 'barrage', 'dam', 'desalination', 'salinisation')) return 'Eau';
-  if (has('agriculture', 'agricole', 'farmer', 'crop', 'récolte', 'pesticide', 'fertilizer', 'fertilisant', 'soil', 'sol', 'irrigation', 'livestock', 'élevage')) return 'Agriculture';
-  if (has('incendie', 'wildfire', 'séisme', 'earthquake', 'tsunami', 'volcano', 'volcan', 'ouragan', 'hurricane', 'cyclone', 'typhoon', 'tempête', 'storm', 'landslide', 'glissement', 'avalanche')) return 'Risques naturels';
-  return 'Changement climatique';
+
+  // API categories only
+  if (has('climate', 'climat', 'réchauff', 'warming', 'greenhouse', 'canicule', 'heatwave')) return 'Climat';
+  if (has('biodivers', 'wildlife', 'espèce', 'faune', 'flore', 'habitat', 'ecosystem', 'conservation')) return 'Biodiversité';
+  if (has('sustainable development', 'développement durable', 'durable')) return 'Développement durable';
+  if (has('énergie', 'energie', 'renewable', 'solar', 'photovolta', 'wind', 'éolien', 'hydrogen', 'hydrogène', 'battery', 'batterie', 'grid', 'électri', 'electr')) return 'Énergie';
+  if (has('pollution', 'plastique', 'microplastic', 'smog', 'qualité de l\'air', 'air quality', 'déchet', 'waste')) return 'Pollution';
+  if (has('agriculture', 'agricole', 'farmer', 'crop', 'récolte', 'pesticide', 'fertilizer', 'fertilisant', 'soil', 'sol', 'irrigation', 'livestock', 'élevage', 'alimentation', 'food')) return 'Agriculture';
+  if (has('eau', 'water', 'river', 'rivière', 'flood', 'inondation', 'drought', 'sécheresse', 'aquifer', 'aquifère')) return 'Eau';
+  if (has('économie circulaire', 'circular economy', 'recycl', 'réutilis')) return 'Économie circulaire';
+  if (has('santé', 'health', 'maladie', 'toxic', 'toxique')) return 'Santé environnementale';
+  if (has('urban', 'urbain', 'ville', 'urbanisme', 'aménagement', 'zoning')) return 'Urbanisme durable';
+  if (has('mobilité', 'transport', 'vélo', 'bus', 'train', 'transit', 'voiture électrique', 'vehicule électrique', 'e-mobility')) return 'Mobilité durable';
+  if (has('technologies vertes', 'green tech', 'cleantech', 'cleantechs', 'innovation', 'innovant', 'startup', 'start-up')) return 'Technologies vertes';
+  if (has('politique', 'policy', 'réglement', 'régulation', 'loi', 'gouvernement', 'gouvernance')) return 'Politique environnementale';
+  if (has('conservation', 'protected area', 'aire protégée', 'réserve', 'parc national')) return 'Conservation';
+  if (has('justice climatique', 'justice', 'equity', 'inequality', 'inégalité')) return 'Justice climatique';
+  if (has('éducation', 'education', 'awareness', 'sensibilisation', 'pédagogie')) return 'Éducation à l\'environnement';
+
+  // Fallback
+  return 'Développement durable';
+}
+
+// Catégories autorisées (sera synchronisée avec l'API) + catégorie par défaut dynamique
+let ALLOWED_CATEGORIES = new Set([
+  'Changement climatique',
+  'Économie circulaire',
+  'Économie bleue',
+  'Économie verte',
+  'Startups vertes',
+  'Hackathons verts Afrique',
+  'RSE',
+  'Leadership féminin & environnement',
+  'Numérique responsable',
+  'IA & environnement',
+  'Programmes gratuits (MOOCs, bourses, séminaires, conférences)',
+  'Journées mondiales durabilité',
+  'Objectifs de Développement Durable (ODD)',
+  'Développement durable',
+  'Écotourisme',
+  'Pays à visiter',
+  'Risques naturels',
+  'Tsunamis',
+  'Phénomènes météorologiques',
+  'Géologie',
+  'Catastrophes naturelles',
+  'Prévention des risques',
+  // Group items (extraits courants)
+  'Changement climatique',
+  'Santé environnementale',
+  'Eau et assainissement',
+  'Pollution et santé environnementale',
+  'Transition énergétique',
+  'Agriculture et alimentation',
+  'Biodiversité (Bassin du Congo)',
+  'Politiques environnementales régionales',
+  'Innovations technologiques vertes',
+]);
+let DEFAULT_CATEGORY = 'Changement climatique';
+
+function getCategoriesUrl() {
+  const env = process.env.ECOSCOPE_API_URL;
+  if (env) {
+    if (/\/api\/news/.test(env)) return env.replace(/\/api\/news.*$/, '/api/categories');
+    return env.replace(/\/$/, '') + '/api/categories';
+  }
+  return 'http://127.0.0.1:5002/api/categories';
+}
+
+async function syncCategoriesFromAPI() {
+  try {
+    const url = getCategoriesUrl();
+    const { data } = await http.get(url, { timeout: 15000 });
+    // Backend renvoie un objet { success, categories, groups, defaultCategory, ... }
+    const list = Array.isArray(data) ? data : Array.isArray(data?.categories) ? data.categories : null;
+    if (Array.isArray(list) && list.length) {
+      ALLOWED_CATEGORIES = new Set(list.map(String));
+      if (data && typeof data.defaultCategory === 'string' && data.defaultCategory.trim()) {
+        DEFAULT_CATEGORY = data.defaultCategory.trim();
+      }
+      console.log('✅ Catégories synchronisées depuis l\'API:', list.length, 'items. Default =', DEFAULT_CATEGORY);
+    } else {
+      console.warn('⚠️ Réponse catégories inattendue, conservation de la liste locale');
+    }
+  } catch (e) {
+    console.warn('❗ Impossible de synchroniser les catégories depuis l\'API, utilisation des valeurs locales. Raison:', e?.message || e);
+  }
+}
+
+// Démarrage: lancer la sync (non bloquant) + refresh périodique
+syncCategoriesFromAPI();
+setInterval(syncCategoriesFromAPI, 6 * 60 * 60 * 1000);
+
+function normalizeCategory(rawCategory) {
+  const input = String(rawCategory || '').trim();
+  const lowerCategory = input.toLowerCase();
+
+  // Gestion spécifique des vidéos → utiliser la catégorie par défaut API
+  if (lowerCategory.includes('vidéo') || lowerCategory.includes('video') || lowerCategory.includes('youtube') || lowerCategory.includes('film') || lowerCategory.includes('documentaire')) {
+    return DEFAULT_CATEGORY;
+  }
+
+  // Mapping spécifique prioritaire (instructions utilisateur)
+  const categoryMappings = {
+    'pollution': 'Pollution et santé environnementale',
+    'énergie': 'Transition énergétique',
+    'energy': 'Transition énergétique',
+    'eau': 'Eau et assainissement',
+    'water': 'Eau et assainissement',
+    'climate': 'Changement climatique',
+    'climat': 'Changement climatique',
+    'biodiversity': 'Biodiversité',
+    'biodiversité': 'Biodiversité',
+    'sustainable': 'Développement durable',
+    'durable': 'Développement durable',
+    'agriculture': 'Agriculture et alimentation',
+    'agriculture urbaine': 'Agriculture et alimentation',
+    'déchets': 'Économie circulaire',
+    'waste': 'Économie circulaire',
+    'renewable': 'Transition énergétique',
+    'renouvelable': 'Transition énergétique'
+  };
+
+  let normalizedCategory = null;
+
+  // 1) Si déjà autorisée (exacte), renvoyer telle quelle
+  if (ALLOWED_CATEGORIES.has(input)) {
+    normalizedCategory = input;
+  }
+
+  // 2) Mapping direct exact (prioritaire sur le reste)
+  if (!normalizedCategory && categoryMappings[lowerCategory]) {
+    normalizedCategory = categoryMappings[lowerCategory];
+  }
+
+  // 3) Correspondances partielles avec le mapping
+  if (!normalizedCategory) {
+    for (const [key, value] of Object.entries(categoryMappings)) {
+      if (lowerCategory.includes(key) || key.includes(lowerCategory)) {
+        normalizedCategory = value;
+        break;
+      }
+    }
+  }
+
+  // 4) Inclusion réciproque contre la liste autorisée
+  if (!normalizedCategory) {
+    for (const allowedCategory of ALLOWED_CATEGORIES) {
+      const a = allowedCategory.toLowerCase();
+      if (lowerCategory.includes(a) || a.includes(lowerCategory)) {
+        normalizedCategory = allowedCategory;
+        break;
+      }
+    }
+  }
+
+  // 5) Fallback final
+  if (!normalizedCategory) {
+    normalizedCategory = 'Développement durable';
+  }
+
+  // Log de débogage
+  try { console.log(`Category mapped from '${rawCategory}' to '${normalizedCategory}'`); } catch {}
+
+  return normalizedCategory;
 }
 
 function isVideoRelevant(title) {
@@ -231,7 +607,7 @@ function isVideoRelevant(title) {
 
 async function fetchArticleMeta(url) {
   try {
-    const { data } = await axios.get(url, { ...REQ_OPTS, timeout: 9000 });
+    const { data } = await getWithRetry(url, { timeout: BASE_TIMEOUT_MS });
     const $ = cheerio.load(data);
     const get = (sel, attr = 'content') => $(sel).attr(attr) || '';
     const content = sanitizeTitle(
@@ -246,25 +622,35 @@ async function fetchArticleMeta(url) {
       $('img').first().attr('src') || '',
       url
     );
+    // Try to extract original published date
+    const publishedAt = (
+      get('meta[property="article:published_time"]') ||
+      get('meta[name="article:published_time"]') ||
+      get('meta[name="pubdate"]') ||
+      get('meta[name="date"]') ||
+      get('meta[property="og:pubdate"]') ||
+      ''
+    );
     return {
       content: content && content.length >= 20 ? content : '',
       imageUrl: imageUrl || null,
+      publishedAt: publishedAt || null,
     };
   } catch {
-    return { content: '', imageUrl: null };
+    return { content: '', imageUrl: null, publishedAt: null };
   }
 }
 
 // IMPORTANT: le backend requiert un champ 'content' non vide
-function asPayload({ title, url, lang, category = 'Changement climatique', content = '', imageUrl = null }) {
+function asPayload({ title, url, lang, category = 'Changement climatique', content = '', imageUrl = null, publishedAt = null }) {
   return {
     title,
     content: (content && content.trim()) ? content : String(title || 'Article'),
     lang: lang === 'en' ? 'en' : 'fr',
-    category, // doit exister côté backend (ex: "Changement climatique")
+    category: normalizeCategory(category), // normalise pour correspondre aux catégories autorisées
     imageUrl: imageUrl || null,
     author: null,
-    publishedAt: new Date().toISOString(),
+    publishedAt: (publishedAt && !Number.isNaN(Date.parse(publishedAt))) ? new Date(publishedAt).toISOString() : new Date().toISOString(),
     sourceUrl: url,
   };
 }
@@ -272,7 +658,7 @@ function asPayload({ title, url, lang, category = 'Changement climatique', conte
 async function scrapeLeMonde() {
   const base = 'https://www.lemonde.fr/planete/';
   try {
-    const { data } = await axios.get(base, REQ_OPTS);
+    const { data } = await getWithRetry(base);
     const $ = cheerio.load(data);
     const seen = new Set();
     const results = [];
@@ -329,7 +715,7 @@ async function scrapeLeMonde() {
 async function scrapeNatGeo() {
   const base = 'https://www.nationalgeographic.com/environment/';
   try {
-    const { data } = await axios.get(base, REQ_OPTS);
+    const { data } = await getWithRetry(base);
     const $ = cheerio.load(data);
     const seen = new Set();
     const results = [];
@@ -379,7 +765,7 @@ async function scrapeNatGeo() {
 async function scrapeBBC() {
   const base = 'https://www.bbc.com/news/science_and_environment';
   try {
-    const { data } = await axios.get(base, REQ_OPTS);
+    const { data } = await getWithRetry(base);
     const $ = cheerio.load(data);
     const seen = new Set();
     const results = [];
@@ -476,14 +862,54 @@ function percentile(arr, p) {
   return sorted[idx];
 }
 
+// (placeholders supprimés — vraies implémentations ci-dessus)
+
+async function connectivityDiagnostics() {
+  try {
+    console.log('🌐 Diagnostic de connectivité: démarrage');
+    const domains = [
+      'www.google.com',
+      'www.lemonde.fr',
+      'www.nationalgeographic.com',
+      'www.bbc.com',
+      'www.ipcc.ch',
+      'www.unep.org',
+    ];
+    for (const d of domains) {
+      try {
+        const r = await dns.resolve(d);
+        console.log(`  ✅ DNS ${d} -> ${Array.isArray(r) ? r.slice(0,2).join(',') : String(r)}`);
+      } catch (e) {
+        console.warn(`  ❗ DNS échec pour ${d}:`, e?.message || e);
+      }
+    }
+    // Requête HTTP légère (204) pour vérifier sortie internet
+    try {
+      const url204 = 'https://www.google.com/generate_204';
+      await http.get(url204, { timeout: 8000 });
+      console.log('  ✅ Accès internet (generate_204) OK');
+    } catch (e) {
+      console.warn('  ❗ Accès internet (generate_204) KO:', e?.message || e);
+    }
+  } catch (e) {
+    console.warn('Diagnostic connectivité: erreur inattendue:', e?.message || e);
+  }
+}
+
 async function runOnce() {
   const t0 = Date.now();
   console.log('🔎 Scraper: démarrage');
+  await connectivityDiagnostics();
   const batches = await Promise.all([
     scrapeLeMonde(),
     scrapeNatGeo(),
     scrapeBBC(),
     scrapeVideos(),
+    scrapeIPCC(),
+    scrapeUNEP(),
+    scrapeScienceDaily(),
+    scrapePhysOrg(),
+    scrapeYouTubeAPI(),
   ]);
   const preItems = batches.flatMap(b => b.results);
   const skippedAll = batches.flatMap(b => b.skipped);
@@ -534,6 +960,7 @@ async function runOnce() {
         category: mapCategory(it.title),
         content: meta.content,
         imageUrl: meta.imageUrl,
+        publishedAt: meta.publishedAt,
       });
     }
   );
@@ -575,5 +1002,15 @@ async function runOnce() {
   console.log(`ENRICH_CAP_USED: ${ENRICH_CAP}`);
 }
 
-// Exécution
-runOnce().then(() => console.log('🏁 Scraper terminé.'));
+// Exécution avec gestion d'erreurs globale
+try {
+  runOnce()
+    .then(() => console.log('🏁 Scraper terminé.'))
+    .catch((e) => {
+      console.error('❌ Scraper: échec global:', e?.stack || e);
+      process.exitCode = 1;
+    });
+} catch (e) {
+  console.error('❌ Scraper: exception non interceptée au niveau supérieur:', e?.stack || e);
+  process.exitCode = 1;
+}

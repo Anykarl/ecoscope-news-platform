@@ -37,10 +37,23 @@ dist/
 **/.cache/
 
 # Env files
+# Ne pas ignorer .env.example et .env.local
+.env.example
+.env.local
+
+# Ignorer tous les autres fichiers .env sauf ceux spécifiés ci-dessus
 .env
+!.env.example
+!.env.local
 .env.*
+!/.env.example
+!/.env.local
 **/.env
+!**/.env.example
+!**/.env.local
 **/.env.*
+!**/.env.example
+!**/.env.local
 
 # Editor/OS
 .DS_Store

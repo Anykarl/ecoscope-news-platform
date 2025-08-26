@@ -1,0 +1,14 @@
+POUR DÉMARRER ECOSCOPE
+
+1) Double-cliquez sur start.ps1
+   OU
+2) Ouvrez PowerShell dans ce dossier et tapez:
+   powershell -ExecutionPolicy Bypass -File start.ps1
+
+L'application sera accessible à:
+- Frontend: http://localhost:3000
+- Backend : http://localhost:5002
+
+Astuce:
+- Si une erreur s'affiche dans le site, fermez et relancez start.ps1.
+- Le script crée automatiquement frontend/.env.local si besoin et installe les dépendances au premier lancement.
