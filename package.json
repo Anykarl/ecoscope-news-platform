@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "EcoScope monorepo scripts to run backend (with cron) and frontend together",
   "scripts": {
-    "start": "powershell -ExecutionPolicy Bypass -File .\\scripts\\start-all.ps1",
+    "start": "cd backend && npm install && npm start",
+    "build": "cd backend && npm install",
     "clean-ports": "powershell -ExecutionPolicy Bypass -File .\\scripts\\clean-ports.ps1",
     "backend": "cd backend && npm run dev",
     "frontend": "cd frontend && npm run dev",
