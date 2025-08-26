@@ -16,9 +16,12 @@
     "backup": "node backup.js"
   },
   "devDependencies": {
+    "archiver": "^6.0.1",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "wait-on": "^8.0.1",
-    "archiver": "^6.0.1"
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1"
   }
 }
