@@ -11,9 +11,19 @@ const useApiHealth = () => {
     const checkApi = async () => {
       try {
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002';
-        const response = await fetch(`${apiUrl}/health`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+        
+        const response = await fetch(`${apiUrl}/health`, {
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
         setApiStatus(response.ok ? 'online' : 'error');
-      } catch {
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          console.log('API health check timeout');
+        }
         setApiStatus('error');
       }
     };
