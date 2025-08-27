@@ -122,6 +122,16 @@ try {
 } catch {}
 app.use('/uploads', express.static(path.join(dataDir, 'uploads')));
 
+// Route racine
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Bienvenue sur l\'API EcoScope', 
+    service: 'EcoScope Test Backend',
+    version: '1.0.0',
+    endpoints: ['/health', '/api/news', '/api/features', '/api/stats', '/api/admin', '/api/refresh']
+  });
+});
+
 // Route test santé
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), service: 'EcoScope Test Backend' });
