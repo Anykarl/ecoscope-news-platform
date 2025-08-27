@@ -93,11 +93,24 @@ const app = express();
 // CORS: authorize frontend origins and credentials
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://ecoscope-news-platform.vercel.app'
+  'https://ecoscope-news-platform.vercel.app',
+  'https://ecoscope-news-platform-production.up.railway.app'
 ];
-app.use(cors({ 
-  origin: allowedOrigins, 
-  credentials: true 
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(express.json());
 
@@ -125,10 +138,17 @@ app.use('/uploads', express.static(path.join(dataDir, 'uploads')));
 // Route racine
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Bienvenue sur l\'API EcoScope', 
+    message: 'EcoScope API is running',
     service: 'EcoScope Test Backend',
     version: '1.0.0',
-    endpoints: ['/health', '/api/news', '/api/features', '/api/stats', '/api/admin', '/api/refresh']
+    endpoints: {
+      health: '/health',
+      news: '/api/news',
+      features: '/api/features',
+      stats: '/api/stats',
+      admin: '/api/admin',
+      refresh: '/api/refresh'
+    }
   });
 });
 
@@ -572,8 +592,35 @@ async function startServer() {
     attempts += 1;
   }
 
+  // Middleware 404 pour routes non trouvées
+  app.use('*', (req, res) => {
+    res.status(404).json({
+      error: 'Route not found',
+      requestedPath: req.originalUrl,
+      availableRoutes: [
+        '/',
+        '/health',
+        '/api/news',
+        '/api/features',
+        '/api/stats',
+        '/api/admin',
+        '/api/refresh'
+      ]
+    });
+  });
+
+  // Configuration du port et variables d'environnement
+  const PORT = process.env.PORT || port;
+  
+  // Logs de debugging pour Railway
+  console.log('Environment Variables:', {
+    PORT: process.env.PORT,
+    NODE_ENV: process.env.NODE_ENV,
+    RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT
+  });
+
   app
-    .listen(port, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${port}`))
+    .listen(PORT, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${PORT}`))
     .on('error', (err) => {
       console.error('❌ Erreur de démarrage:', err?.stack || err);
       process.exit(1);
