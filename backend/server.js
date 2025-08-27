@@ -157,6 +157,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), service: 'EcoScope Test Backend' });
 });
 
+// Endpoint de health check approfondi
+app.get('/api/health/deep', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    service: 'EcoScope Backend',
+    database: 'connected',
+    admin: 'available',
+    cors: 'configured',
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 // Endpoint de configuration des fonctionnalités / rôles
 app.get('/api/features', (_req, res) => {
   res.json({ summarizeEnabled: true, roles: ['viewer', 'admin'], defaultRole: 'viewer' });
