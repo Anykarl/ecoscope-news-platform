@@ -47,7 +47,7 @@ export function createAdminRouter(api) {
   });
 
   // delete
-  r.delete('/articles/:id', adminGuard, (req, res) => {
+  r.delete('/articles/:id(\\d+)', adminGuard, (req, res) => {
     const id = Number(req.params.id);
     const ok = api.deleteArticle(id);
     if (!ok) return res.status(404).json({ success: false, message: 'Not found' });
