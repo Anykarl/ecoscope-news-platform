@@ -90,9 +90,15 @@ if (typeof globalThis.Request === 'undefined') globalThis.Request = Request;
 if (typeof globalThis.Response === 'undefined') globalThis.Response = Response;
 
 const app = express();
-// CORS: authorize frontend origin and credentials
-const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
-app.use(cors({ origin: allowedOrigin, credentials: true }));
+// CORS: authorize frontend origins and credentials
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://ecoscope-news-platform.vercel.app'
+];
+app.use(cors({ 
+  origin: allowedOrigins, 
+  credentials: true 
+}));
 app.use(express.json());
 
 // Robust error handling: prevent process crash on unhandled errors, log them instead
