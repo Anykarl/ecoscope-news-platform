@@ -623,7 +623,7 @@ async function startServer() {
   });
 
   // Configuration du port et variables d'environnement
-  const PORT = process.env.PORT || port;
+  const SERVER_PORT = process.env.PORT || port;
   
   // Logs de debugging pour Railway
   console.log('Environment Variables:', {
@@ -633,7 +633,7 @@ async function startServer() {
   });
 
   app
-    .listen(PORT, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${PORT}`))
+    .listen(SERVER_PORT, '0.0.0.0', () => console.log(`🌱 EcoScope Test Backend démarré sur le port ${SERVER_PORT}`))
     .on('error', (err) => {
       console.error('❌ Erreur de démarrage:', err?.stack || err);
       process.exit(1);

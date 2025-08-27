@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoScope API Debug</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .online { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .checking { background: #fff3cd; color: #856404; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 5px; overflow-x: auto; }
+        .log { margin: 10px 0; padding: 10px; background: #f1f3f4; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>EcoScope API Debug Tool</h1>
+    
+    <div id="status" class="status checking">🔄 Checking API status...</div>
+    
+    <div>
+        <button onclick="testHealth()">Test /health</button>
+        <button onclick="testNews()">Test /api/news</button>
+        <button onclick="testFeatures()">Test /api/features</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+    
+    <div id="logs"></div>
+    
+    <script>
+        const API_URL = 'http://localhost:5002';
+        const statusDiv = document.getElementById('status');
+        const logsDiv = document.getElementById('logs');
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log';
+            logEntry.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+            logsDiv.appendChild(logEntry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+            console.log(`[${timestamp}] ${message}`);
+        }
+        
+        function updateStatus(status, message) {
+            statusDiv.className = `status ${status}`;
+            statusDiv.innerHTML = message;
+        }
+        
+        async function testEndpoint(endpoint, description) {
+            log(`🔍 Testing ${description}: ${API_URL}${endpoint}`);
+            
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    controller.abort();
+                    log(`⏰ Request timeout after 10 seconds`, 'error');
+                }, 10000);
+                
+                const startTime = performance.now();
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    signal: controller.signal,
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                clearTimeout(timeoutId);
+                const endTime = performance.now();
+                const duration = Math.round(endTime - startTime);
+                
+                log(`📊 Response: ${response.status} ${response.statusText} (${duration}ms)`);
+                
+                if (response.ok) {
+                    const data = await response.text();
+                    log(`✅ Success: ${data.substring(0, 200)}${data.length > 200 ? '...' : ''}`);
+                    return { success: true, data, status: response.status, duration };
+                } else {
+                    const errorText = await response.text();
+                    log(`❌ Error: ${errorText}`, 'error');
+                    return { success: false, error: errorText, status: response.status, duration };
+                }
+                
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    log(`⏰ Request aborted (timeout)`, 'error');
+                } else {
+                    log(`❌ Network error: ${error.message}`, 'error');
+                }
+                return { success: false, error: error.message };
+            }
+        }
+        
+        async function testHealth() {
+            const result = await testEndpoint('/health', 'Health Check');
+            if (result.success) {
+                updateStatus('online', '✅ API: Connected');
+            } else {
+                updateStatus('error', '❌ API: Disconnected');
+            }
+        }
+        
+        async function testNews() {
+            await testEndpoint('/api/news', 'News Endpoint');
+        }
+        
+        async function testFeatures() {
+            await testEndpoint('/api/features', 'Features Endpoint');
+        }
+        
+        function clearLogs() {
+            logsDiv.innerHTML = '';
+        }
+        
+        // Auto-test on load
+        window.onload = function() {
+            log('🚀 EcoScope API Debug Tool started');
+            log(`🎯 Target API: ${API_URL}`);
+            testHealth();
+        };
+        
+        // Periodic health check
+        setInterval(testHealth, 30000);
+    </script>
+</body>
+</html>
