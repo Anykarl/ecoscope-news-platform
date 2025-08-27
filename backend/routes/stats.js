@@ -4,7 +4,7 @@ export function createStatsRouter(statsModel, api) {
   const r = express.Router();
 
   // increment read count for an article
-  r.post('/read/:id(\\d+)', (req, res) => {
+  r.post('/read/:id', (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
     const article = api.findArticle(id);
