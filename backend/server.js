@@ -117,12 +117,12 @@ app.use(express.json());
 // Robust error handling: prevent process crash on unhandled errors, log them instead
 process.on('uncaughtException', (err) => {
   console.error('UncaughtException:', err?.stack || err);
+  process.exit(1);
 });
 
-// Routers mounted later once dataDir/api and SSE are ready (see after backups endpoints)
-
-process.on('unhandledRejection', (reason) => {
-  console.error('UnhandledRejection:', reason);
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UnhandledRejection at:', promise, 'reason:', reason);
+  // Application specific logging, throwing an error, or other logic here
 });
 
 const backupsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'backups');
@@ -606,7 +606,7 @@ async function startServer() {
   }
 
   // Middleware 404 pour routes non trouvées
-  app.use('*', (req, res) => {
+  app.use('/*', (req, res) => {
     res.status(404).json({
       error: 'Route not found',
       requestedPath: req.originalUrl,
